@@ -1,0 +1,5 @@
+node_modules/
+package-lock.json
+uploads/*
+!uploads/avatars/.gitkeep
+.env

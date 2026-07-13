@@ -1,0 +1,274 @@
+const mongoose = require('mongoose');
+const { Portfolio } = require('../models/portfolio.model.js');
+const { Investor }  = require('../models/user.model.js');
+const { Idea }      = require('../models/ideas.model.js');
+const { pushNotification } = require('./notifications.controller.js');
+const { incrementTrust }   = require('../utils/trust.util.js');
+
+
+const assertInvestor = (req, res) => {
+	if (req.user.role !== 'Investor') {
+		res.status(403).json({ success: false, message: 'Investor account required' });
+		return false;
+	}
+	return true;
+};
+
+
+
+
+const commit = async (req, res) => {
+	if (!assertInvestor(req, res)) return;
+
+	const { ideaId, amount } = req.body;
+
+	if (!ideaId || !mongoose.Types.ObjectId.isValid(ideaId)) {
+		return res.status(400).json({ success: false, message: 'Valid ideaId is required' });
+	}
+	if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) {
+		return res.status(400).json({ success: false, message: 'amount must be a positive number' });
+	}
+
+	try {
+		
+		const idea = await Idea.findById(ideaId).select('title founder_id').lean();
+		if (!idea) {
+			return res.status(404).json({ success: false, message: 'Idea not found' });
+		}
+
+		
+		let portfolio = await Portfolio.findOne({ investor_id: req.user._id });
+
+		if (!portfolio) {
+			portfolio = new Portfolio({
+				investor_id:  req.user._id,
+				investments:  []
+			});
+		}
+
+		
+		const alreadyCommitted = portfolio.investments.some(
+			(inv) => inv.idea_id.toString() === ideaId
+		);
+		if (alreadyCommitted) {
+			return res.status(409).json({
+				success: false,
+				message: 'You have already committed to this idea'
+			});
+		}
+
+		
+		portfolio.investments.push({
+			idea_id:          ideaId,
+			amount_committed: Number(amount),
+			amount_released:  0,
+			status:           'active'
+		});
+
+		await portfolio.save();
+
+		
+		await Investor.findByIdAndUpdate(req.user._id, {
+			portfolio_id: portfolio._id
+		});
+
+		
+		await incrementTrust(req.user._id, { history: 1 });
+
+		
+		if (idea.founder_id) {
+			const investor = await Investor
+				.findById(req.user._id)
+				.select('name firm')
+				.lean();
+
+			const investorName = investor?.name || 'An investor';
+			const firmSuffix   = investor?.firm ? ` (${investor.firm})` : '';
+
+			await pushNotification(
+				idea.founder_id,
+				`${investorName}${firmSuffix} committed $${Number(amount).toLocaleString()} to your idea "${idea.title}"`
+			);
+		}
+
+		return res.status(201).json({
+			success: true,
+			message: 'Commitment recorded',
+			investment: portfolio.investments[portfolio.investments.length - 1]
+		});
+
+	} catch (err) {
+		console.error('commit:', err);
+		return res.status(500).json({ success: false, message: 'Internal server error' });
+	}
+};
+
+
+
+const get_portfolio = async (req, res) => {
+	if (!assertInvestor(req, res)) return;
+
+	try {
+		const portfolio = await Portfolio
+			.findOne({ investor_id: req.user._id })
+			.populate({
+				path:   'investments.idea_id',
+				select: 'title stage tags founder_id author likes views'
+			})
+			.lean();
+
+		if (!portfolio) {
+			return res.status(200).json({
+				data:           [],
+				totalCommitted: 0,
+				totalReleased:  0
+			});
+		}
+
+		const data = portfolio.investments.map((inv) => {
+			const idea = inv.idea_id;   
+			return {
+				id:               inv._id,
+				ideaId:           idea?._id || inv.idea_id,
+				name:             idea?.title      || 'Unknown',
+				stage:            idea?.stage      || '',
+				tags:             idea?.tags       || [],
+				author:           idea?.author     || '',
+				likes:            idea?.likes      || 0,
+				committed:        inv.amount_committed,
+				released:         inv.amount_released,
+				status:           inv.status,
+				committed_at:     inv.committed_at
+			};
+		});
+
+		const totalCommitted = data.reduce((sum, r) => sum + r.committed, 0);
+		const totalReleased  = data.reduce((sum, r) => sum + r.released,  0);
+
+		return res.status(200).json({ data, totalCommitted, totalReleased });
+
+	} catch (err) {
+		console.error('get_portfolio:', err);
+		return res.status(500).json({ success: false, message: 'Internal server error' });
+	}
+};
+
+
+
+const withdraw = async (req, res) => {
+	if (!assertInvestor(req, res)) return;
+
+	const { investmentId } = req.params;
+
+	try {
+		const portfolio = await Portfolio.findOne({ investor_id: req.user._id });
+		if (!portfolio) {
+			return res.status(404).json({ success: false, message: 'Portfolio not found' });
+		}
+
+		const before = portfolio.investments.length;
+		portfolio.investments = portfolio.investments.filter(
+			(inv) => inv._id.toString() !== investmentId
+		);
+
+		if (portfolio.investments.length === before) {
+			return res.status(404).json({ success: false, message: 'Investment not found' });
+		}
+
+		await portfolio.save();
+
+		return res.status(200).json({ success: true, message: 'Investment withdrawn' });
+
+	} catch (err) {
+		console.error('withdraw:', err);
+		return res.status(500).json({ success: false, message: 'Internal server error' });
+	}
+};
+
+module.exports = { commit, get_portfolio, withdraw };
+
+
+
+
+
+async function release(req, res) {
+	if (!assertInvestor(req, res)) return;
+
+	const { investmentId } = req.params;
+	const { amount } = req.body;
+
+	if (!mongoose.Types.ObjectId.isValid(investmentId)) {
+		return res.status(400).json({ success: false, message: 'Invalid investment ID' });
+	}
+	if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) {
+		return res.status(400).json({ success: false, message: 'amount must be a positive number' });
+	}
+
+	try {
+		const portfolio = await Portfolio.findOne({ investor_id: req.user._id });
+		if (!portfolio) {
+			return res.status(404).json({ success: false, message: 'Portfolio not found' });
+		}
+
+		const investment = portfolio.investments.id(investmentId);
+		if (!investment) {
+			return res.status(404).json({ success: false, message: 'Investment not found' });
+		}
+
+		const releaseAmount = Number(amount);
+		const remaining = investment.amount_committed - investment.amount_released;
+
+		if (releaseAmount > remaining) {
+			return res.status(400).json({
+				success: false,
+				message: `Cannot release more than the remaining committed amount ($${remaining.toLocaleString()})`,
+			});
+		}
+
+		investment.amount_released += releaseAmount;
+
+		
+		if (investment.amount_released >= investment.amount_committed) {
+			investment.status = 'released';
+		}
+
+		await portfolio.save();
+
+		
+		await incrementTrust(req.user._id, { escrowReleases: 1 });
+
+		
+		const idea = await Idea.findById(investment.idea_id).select('title founder_id').lean();
+		if (idea?.founder_id) {
+			const investor = await Investor
+				.findById(req.user._id)
+				.select('name firm')
+				.lean();
+
+			const investorName = investor?.name || 'An investor';
+			const firmSuffix   = investor?.firm ? ` (${investor.firm})` : '';
+
+			await pushNotification(
+				idea.founder_id,
+				`${investorName}${firmSuffix} released $${releaseAmount.toLocaleString()} for "${idea.title}"`
+			);
+		}
+
+		return res.status(200).json({
+			success: true,
+			message: `$${releaseAmount.toLocaleString()} released`,
+			investment: {
+				id:               investment._id,
+				amount_committed: investment.amount_committed,
+				amount_released:  investment.amount_released,
+				status:           investment.status,
+			},
+		});
+
+	} catch (err) {
+		console.error('release:', err);
+		return res.status(500).json({ success: false, message: 'Internal server error' });
+	}
+}
+
+module.exports = { commit, get_portfolio, withdraw, release };

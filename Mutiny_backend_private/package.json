@@ -1,0 +1,35 @@
+{
+  "name": "mutiny",
+  "version": "1.0.0",
+  "description": "",
+  "homepage": "https://github.com/somelamedude-git/Mutiny_backend_private#readme",
+  "bugs": {
+    "url": "https://github.com/somelamedude-git/Mutiny_backend_private/issues"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/somelamedude-git/Mutiny_backend_private.git"
+  },
+  "license": "ISC",
+  "author": "",
+  "type": "commonjs",
+  "main": "index.js",
+  "dependencies": {
+    "bcrypt": "^6.0.0",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "crypto": "^1.0.1",
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "express-rate-limit": "7.5.0",
+    "jsonwebtoken": "^9.0.3",
+    "mongoose": "^9.0.1",
+    "multer": "^2.2.0",
+    "socket.io": "^4.8.1"
+  }
+}
