@@ -1,0 +1,33 @@
+html,
+body,
+#__next,
+body > div:first-child,
+body > main:first-child {
+  background-color: #0A0A0C !important;
+  border-radius: 0 !important;
+}
+
+/* Ensure top bars use the same canvas and don’t introduce tints */
+header,
+nav {
+  background-color: #0A0A0C !important;
+}
+
+/* Optional: prevent unexpected overflow that can reveal page background */
+html, body {
+  height: 100%;
+  margin: 0;
+}
+
+// app/layout.tsx
+// Existing code here
+
+export default function RootLayout({ children }: { children: React.ReactNode }) {
+  return (
+    <html lang="en">
+      <body className="min-h-screen bg-[#0A0A0C] text-white antialiased">
+        {children}
+      </body>
+    </html>
+  );
+}
