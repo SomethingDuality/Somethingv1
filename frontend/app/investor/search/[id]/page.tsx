@@ -26,6 +26,10 @@ type Project = {
   fundsSpent: number
   founders: { id: string; name: string; role: string }[]
   uploads: { type: "deck" | "link" | "image"; label: string; href?: string; src?: string }[]
+  communityTarget?: number
+  communityRaised?: number
+  pledges?: any[]
+  communityUpdates?: any[]
 }
 
 const MOCK: Project[] = []
@@ -53,27 +57,76 @@ export default function ProjectBriefPage() {
   useEffect(() => {
     if (!id) return
     setIsLoadingProject(true)
-    apiClient.get(`/ideas/${id}`)
-      .then((res) => {
-        const raw = res.data
-        setP({
-          id: raw._id ?? raw.id,
-          name: raw.title ?? "Untitled",
-          domains: raw.tags ?? [],
-          desc: raw.description ?? raw.desc ?? "",
-          stage: raw.stage ?? "concept",
-          launchedAt: raw.createdAt ?? null,
-          trustPoints: 75,
-          location: raw.location ?? "Remote",
-          investmentNeeded: raw.fundingGoal ?? 0,
-          fundsGained: raw.fundsGained ?? 0,
-          fundsSpent: raw.fundsSpent ?? 0,
-          founders: raw.founders ?? [],
-          uploads: raw.uploads ?? [],
-        })
-      })
-      .catch(() => setP(null))
-      .finally(() => setIsLoadingProject(false))
+
+    const fetchProjectAndCommunity = async () => {
+      let projectData: any = null
+      try {
+        const res = await apiClient.get(`/ideas/${id}`)
+        projectData = res.data
+      } catch (err) {
+        console.warn("Failed to fetch project from API, using local projects-store fallback:", err)
+      }
+
+      try {
+        const { getCommunityStats } = require("@/lib/community-api")
+        const commStats = await getCommunityStats(id)
+
+        if (projectData) {
+          setP({
+            id: projectData._id ?? projectData.id,
+            name: projectData.title ?? "Untitled",
+            domains: projectData.tags ?? [],
+            desc: projectData.description ?? projectData.desc ?? "",
+            stage: projectData.stage ?? "concept",
+            launchedAt: projectData.createdAt ?? null,
+            trustPoints: 75,
+            location: projectData.location ?? "Remote",
+            investmentNeeded: projectData.fundingGoal ?? 0,
+            fundsGained: projectData.fundsGained ?? 0,
+            fundsSpent: projectData.fundsSpent ?? 0,
+            founders: projectData.founders ?? [],
+            uploads: projectData.uploads ?? [],
+            communityTarget: commStats.communityTarget,
+            communityRaised: commStats.communityRaised,
+            pledges: commStats.pledges,
+            communityUpdates: commStats.communityUpdates,
+          })
+        } else {
+          const { getProjectById } = require("@/lib/projects-store")
+          const storeProj = getProjectById(id)
+          if (storeProj) {
+            setP({
+              id: storeProj.id,
+              name: storeProj.name,
+              domains: storeProj.domains,
+              desc: storeProj.desc,
+              stage: storeProj.stage,
+              launchedAt: storeProj.launchedAt,
+              trustPoints: storeProj.trustPoints,
+              location: storeProj.location,
+              investmentNeeded: storeProj.investmentNeeded,
+              fundsGained: storeProj.fundsGained,
+              fundsSpent: storeProj.fundsSpent,
+              founders: storeProj.founders,
+              uploads: storeProj.uploads,
+              communityTarget: commStats.communityTarget,
+              communityRaised: commStats.communityRaised,
+              pledges: commStats.pledges,
+              communityUpdates: commStats.communityUpdates,
+            })
+          } else {
+            setP(null)
+          }
+        }
+      } catch (err) {
+        console.error("Failed to load community details or fallback:", err)
+        setP(null)
+      } finally {
+        setIsLoadingProject(false)
+      }
+    }
+
+    fetchProjectAndCommunity()
   }, [id])
 
   if (isLoadingProject) {
@@ -312,6 +365,54 @@ export default function ProjectBriefPage() {
             />
           </div>
         </div>
+      </div>
+      
+      {/* ── Community Backing & Announcements ── */}
+      <div className="space-y-4">
+        <div className="rounded-xl border border-border bg-[#0a0b0d]/30 p-5 space-y-4">
+          <div className="flex justify-between items-center">
+            <p className="text-[9px] font-mono uppercase tracking-[0.18em] text-muted-foreground">Community Backing (Founder Pledges)</p>
+            <Badge className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-mono px-2 py-0.5 rounded-full">
+              Active Pledges
+            </Badge>
+          </div>
+          <div className="flex justify-between items-baseline">
+            <div className="text-xl font-serif font-light text-foreground">
+              ₹{(p.communityRaised || 0).toLocaleString()} <span className="text-xs text-muted-foreground">pledged of ₹{(p.communityTarget || 25000).toLocaleString()} target</span>
+            </div>
+            <div className="text-xs font-mono text-muted-foreground">
+              {Math.round(((p.communityRaised || 0) / (p.communityTarget || 25000)) * 100)}% Funded
+            </div>
+          </div>
+          <div className="h-1.5 rounded-full bg-border overflow-hidden">
+            <div
+              className="h-1.5 rounded-full transition-all bg-emerald-400"
+              style={{ width: `${Math.min(100, Math.round(((p.communityRaised || 0) / (p.communityTarget || 25000)) * 100))}%` }}
+            />
+          </div>
+        </div>
+
+        {p.communityUpdates && p.communityUpdates.length > 0 && (
+          <div className="rounded-xl border border-emerald-500/10 bg-emerald-500/[0.01] p-5 space-y-4">
+            <div className="flex items-center gap-2">
+              <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400" />
+              <p className="text-[9px] font-mono uppercase tracking-[0.18em] text-emerald-400">Founder Announcements & Validation Stream</p>
+            </div>
+            <div className="space-y-3.5">
+              {p.communityUpdates.map((u: any) => (
+                <div key={u.id} className="border-l border-emerald-500/20 pl-3.5 py-0.5 space-y-1">
+                  <div className="flex justify-between items-center flex-wrap gap-2">
+                    <h4 className="text-xs font-semibold text-foreground/90">{u.title}</h4>
+                    <span className="text-[10px] font-mono text-foreground/35">{u.date}</span>
+                  </div>
+                  <p className="text-xs text-foreground/50 leading-relaxed font-sans font-light">
+                    {u.content}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── Uploads (Gated behind Mutual NDA) ── */}

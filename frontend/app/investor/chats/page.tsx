@@ -71,7 +71,7 @@ export default function InvestorChatsPage() {
   const [isLoadingMessages, setIsLoadingMessages] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [isNewChatOpen, setIsNewChatOpen] = useState(false)
-  const [selectedParticipant, setSelectedParticipant] = useState(AVAILABLE_PARTICIPANTS[0].name)
+  const [selectedParticipant, setSelectedParticipant] = useState(AVAILABLE_PARTICIPANTS[0]?.name || "")
 
   const handleCreateThread = () => {
     const part = AVAILABLE_PARTICIPANTS.find(p => p.name === selectedParticipant)

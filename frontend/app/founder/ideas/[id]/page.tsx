@@ -8,7 +8,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { ArrowLeft, MessageSquare, Heart, Loader2, AlertTriangle, ArrowBigUp, ArrowBigDown, Flag, Send, Share2, Download, Paperclip, Film, Volume2, FileText, Presentation } from "lucide-react"
+import { ArrowLeft, MessageSquare, Heart, Loader2, AlertTriangle, ArrowBigUp, ArrowBigDown, Flag, Send, Share2, Download, Paperclip, Film, Volume2, FileText, Presentation, Coins } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { toast } from "@/components/ui/use-toast"
 
@@ -38,6 +38,11 @@ interface Idea {
   flagged?: boolean
   flagReason?: string
   attachments?: Attachment[]
+  communityTarget?: number
+  communityRaised?: number
+  investmentNeeded?: number
+  fundsGained?: number
+  fundsSpent?: number
 }
 
 interface Comment {
@@ -66,6 +71,11 @@ export default function IdeaDetailsPage() {
   const [commentInput, setCommentInput] = useState("")
   const [flagReasonText, setFlagReasonText] = useState("")
   const [isFlagModalOpen, setIsFlagModalOpen] = useState(false)
+  
+  // Pledge states
+  const [isPledgeModalOpen, setIsPledgeModalOpen] = useState(false)
+  const [pledgeInput, setPledgeInput] = useState("")
+  const [customPledgeError, setCustomPledgeError] = useState<string | null>(null)
 
   const handleShareClick = () => {
     if (typeof window !== "undefined") {
@@ -123,19 +133,60 @@ export default function IdeaDetailsPage() {
     const fetchData = async () => {
       setIsLoading(true)
       setError(null)
+      
+      let ideaData: any = null
       try {
-        // ── Try real API first ────────────────────────────────────────────────
         const res = await apiClient.get(`/ideas/${id}`)
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const raw: any = res.data
-        const apiIdea: Idea = {
-          ...raw,
-          id: raw._id ?? raw.id,
-          commentsCount: raw.comments ?? 0,
-        }
-        setIdea(apiIdea)
+        ideaData = res.data
+      } catch (err) {
+        console.warn("Failed to fetch idea from API, using fallback:", err)
+      }
 
-        // Fetch comments from API, fallback to localStorage if offline
+      try {
+        const { getCommunityStats } = require("@/lib/community-api")
+        const commStats = await getCommunityStats(id)
+
+        if (ideaData) {
+          setIdea({
+            ...ideaData,
+            id: ideaData._id ?? ideaData.id,
+            commentsCount: ideaData.comments ?? 0,
+            communityTarget: commStats.communityTarget,
+            communityRaised: commStats.communityRaised,
+            investmentNeeded: ideaData.fundingGoal ?? 25000,
+            fundsGained: ideaData.fundsGained ?? 0,
+            fundsSpent: ideaData.fundsSpent ?? 0,
+          })
+        } else {
+          const { getProjectById } = require("@/lib/projects-store")
+          const storeProj = getProjectById(id)
+          if (storeProj) {
+            setIdea({
+              id: storeProj.id,
+              title: storeProj.name,
+              author: storeProj.author,
+              authorHeadline: storeProj.authorHeadline,
+              stage: storeProj.stage,
+              tags: storeProj.domains,
+              description: storeProj.description,
+              lookingFor: [],
+              likes: storeProj.likes,
+              commentsCount: storeProj.commentsCount,
+              communityTarget: commStats.communityTarget,
+              communityRaised: commStats.communityRaised,
+              investmentNeeded: storeProj.investmentNeeded,
+              fundsGained: storeProj.fundsGained,
+              fundsSpent: storeProj.fundsSpent,
+              attachments: storeProj.attachments,
+            })
+          } else {
+            setError("Could not load the idea specifications.")
+            setIsLoading(false)
+            return
+          }
+        }
+
+        // Fetch comments
         try {
           const commentsRes = await apiClient.get<Comment[]>(`/ideas/${id}/comments`)
           setComments(commentsRes.data)
@@ -145,37 +196,9 @@ export default function IdeaDetailsPage() {
           const storedComments = localStorage.getItem(commentsKey)
           setComments(storedComments ? JSON.parse(storedComments) : [])
         }
-      } catch {
-        // ── Fall back to localStorage data ────────────────────────────────────
-        try {
-          let foundIdea: Idea | null = null
-          const yourStored = localStorage.getItem("founder_your_ideas")
-          const discStored = localStorage.getItem("founder_discover_ideas")
-
-          if (yourStored) {
-            const list = JSON.parse(yourStored) as Idea[]
-            const matched = list.find(x => x.id === id)
-            if (matched) foundIdea = matched
-          }
-          if (!foundIdea && discStored) {
-            const list = JSON.parse(discStored) as Idea[]
-            const matched = list.find(x => x.id === id)
-            if (matched) foundIdea = matched
-          }
-          if (!foundIdea) {
-            setError("Could not load the idea specifications.")
-            setIsLoading(false)
-            return
-          }
-          setIdea(foundIdea)
-
-          const commentsKey = `comments_${id}`
-          const storedComments = localStorage.getItem(commentsKey)
-          setComments(storedComments ? JSON.parse(storedComments) : [])
-        } catch (err) {
-          setError("Could not load the idea specifications.")
-          console.error(err)
-        }
+      } catch (err) {
+        setError("Could not load the idea specifications.")
+        console.error(err)
       } finally {
         setIsLoading(false)
       }
@@ -206,6 +229,48 @@ export default function IdeaDetailsPage() {
         list[idx] = updatedIdea
         localStorage.setItem("founder_discover_ideas", JSON.stringify(list))
       }
+    }
+  }
+
+  const handlePledgeSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!idea) return
+
+    const amount = parseInt(pledgeInput)
+    if (isNaN(amount) || amount <= 0) {
+      setCustomPledgeError("Please enter a valid positive amount.")
+      return
+    }
+
+    try {
+      const { submitCommunityPledge } = require("@/lib/community-api")
+      const result = await submitCommunityPledge(idea.id, amount, userName, "Pledged support via details feed.")
+      
+      if (result.success) {
+        const updatedIdea: Idea = {
+          ...idea,
+          communityRaised: result.communityRaised
+        }
+        saveIdeaState(updatedIdea)
+        
+        toast({
+          title: "Pledge Recorded",
+          description: `Thank you! You have pledged ₹${amount.toLocaleString()} to support "${idea.title}".`,
+        })
+        setIsPledgeModalOpen(false)
+        setPledgeInput("")
+        
+        window.dispatchEvent(new CustomEvent("global-projects-updated"))
+      } else {
+        throw new Error("Pledge submission rejected")
+      }
+    } catch (err) {
+      console.error(err)
+      toast({
+        title: "Error Pledging",
+        description: "Could not find backing data for this project in local store.",
+        variant: "destructive"
+      })
     }
   }
 
@@ -547,6 +612,76 @@ export default function IdeaDetailsPage() {
           )
         })()}
 
+        {/* Funding Pools: Community (Pledges) & Investor (Escrow) */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Community Card */}
+          <Card className="relative overflow-hidden bg-background/10 border-border/[0.03] rounded-xl shadow-md p-6 space-y-4">
+            <div className="absolute -top-32 -right-32 w-64 h-64 rounded-full bg-brand-accent/2 blur-3xl pointer-events-none" />
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+              <div className="space-y-1">
+                <h3 className="text-[11px] font-mono uppercase tracking-[0.2em] text-foreground/35">Community Funding Pool</h3>
+                <div className="text-2xl font-serif font-light text-foreground">
+                  ₹{(idea.communityRaised || 0).toLocaleString()} <span className="text-xs text-foreground/40">raised of ₹{(idea.communityTarget || 25000).toLocaleString()}</span>
+                </div>
+              </div>
+              {idea.author !== "You" ? (
+                <Button
+                  onClick={() => setIsPledgeModalOpen(true)}
+                  className="h-9 rounded-full bg-foreground text-background hover:bg-brand-accent hover:text-background text-xs font-semibold px-5 transition-all duration-300 cursor-pointer"
+                >
+                  Back this Project
+                </Button>
+              ) : (
+                <Badge className="bg-brand-accent/10 text-brand-accent border border-brand-accent/20 text-[11px] font-mono px-3 py-1 rounded-full">
+                  Your Campaign Active
+                </Badge>
+              )}
+            </div>
+            
+            <div className="space-y-2">
+              <div className="h-2 w-full rounded-full bg-foreground/5 overflow-hidden">
+                <div
+                  className="h-full bg-brand-accent transition-all duration-500"
+                  style={{ width: `${Math.min(100, Math.round(((idea.communityRaised || 0) / (idea.communityTarget || 25000)) * 100))}%` }}
+                />
+              </div>
+              <div className="flex justify-between text-[10px] font-mono text-foreground/30">
+                <span>{Math.round(((idea.communityRaised || 0) / (idea.communityTarget || 25000)) * 100)}% Funded</span>
+                <span>Active Community Escrow</span>
+              </div>
+            </div>
+          </Card>
+
+          {/* Investor Card */}
+          <Card className="relative overflow-hidden bg-background/10 border-border/[0.03] rounded-xl shadow-md p-6 space-y-4">
+            <div className="absolute -top-32 -right-32 w-64 h-64 rounded-full bg-amber-500/2 blur-3xl pointer-events-none" />
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+              <div className="space-y-1">
+                <h3 className="text-[11px] font-mono uppercase tracking-[0.2em] text-foreground/35">Investor Escrow Pool</h3>
+                <div className="text-2xl font-serif font-light text-foreground">
+                  ${(idea.fundsGained || 0).toLocaleString()} <span className="text-xs text-foreground/40">gained of ${(idea.investmentNeeded || 25000).toLocaleString()}</span>
+                </div>
+              </div>
+              <Badge variant="outline" className="text-[11px] font-mono border-amber-500/30 text-amber-400 bg-amber-500/5 px-3 py-1 rounded-full">
+                Institutional Gated
+              </Badge>
+            </div>
+            
+            <div className="space-y-2">
+              <div className="h-2 w-full rounded-full bg-foreground/5 overflow-hidden">
+                <div
+                  className="h-full transition-all duration-500"
+                  style={{ width: `${Math.min(100, Math.round(((idea.fundsGained || 0) / (idea.investmentNeeded || 25000)) * 100))}%`, background: "var(--brand-accent)" }}
+                />
+              </div>
+              <div className="flex justify-between text-[10px] font-mono text-foreground/30">
+                <span>{Math.round(((idea.fundsGained || 0) / (idea.investmentNeeded || 25000)) * 100)}% Gained</span>
+                <span>Requires Milestone Releases</span>
+              </div>
+            </div>
+          </Card>
+        </div>
+
         {/* Author & Voting Actions */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <Card className="md:col-span-1 bg-background/10 border-border/[0.03] rounded-xl shadow-md hover:border-border/10 transition-all duration-300">
@@ -707,6 +842,80 @@ export default function IdeaDetailsPage() {
                 Submit Flag
               </Button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Pledge dialog */}
+      {isPledgeModalOpen && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-popover border border-border p-6 rounded-xl max-w-sm w-full space-y-4 shadow-2xl">
+            <div className="flex items-center gap-2 text-brand-accent">
+              <Coins className="h-5 w-5" />
+              <h3 className="font-serif text-base font-semibold text-foreground">Pledge Support</h3>
+            </div>
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              Support this project with any amount. Every rupee counts. All pledges are held in milestone escrow pools.
+            </p>
+            
+            <form onSubmit={handlePledgeSubmit} className="space-y-4">
+              <div className="space-y-2">
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-foreground/40 font-mono text-xs">₹</span>
+                  <Input
+                    type="number"
+                    min="1"
+                    placeholder="Enter pledge amount..."
+                    value={pledgeInput}
+                    onChange={(e) => {
+                      setPledgeInput(e.target.value)
+                      setCustomPledgeError(null)
+                    }}
+                    className="pl-7 bg-accent/20 border-border text-xs focus-visible:ring-brand-accent"
+                    required
+                  />
+                </div>
+                {customPledgeError && (
+                  <p className="text-[10px] text-rose-500 font-mono">{customPledgeError}</p>
+                )}
+              </div>
+
+              {/* Quick Preset Buttons */}
+              <div className="grid grid-cols-4 gap-2">
+                {[10, 50, 100, 500].map((preset) => (
+                  <button
+                    type="button"
+                    key={preset}
+                    onClick={() => {
+                      setPledgeInput(preset.toString())
+                      setCustomPledgeError(null)
+                    }}
+                    className="h-8 rounded bg-foreground/5 border border-border/10 text-[11px] font-mono text-foreground/75 hover:bg-brand-accent/20 hover:text-brand-accent hover:border-brand-accent/20 transition-all cursor-pointer"
+                  >
+                    +₹{preset}
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => { setIsPledgeModalOpen(false); setPledgeInput(""); setCustomPledgeError(null) }}
+                  className="h-8 text-xs rounded-lg border-border/60"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="submit"
+                  size="sm"
+                  className="h-8 text-xs rounded-lg bg-brand-accent text-background hover:bg-brand-accent hover:text-background"
+                >
+                  Submit Pledge
+                </Button>
+              </div>
+            </form>
           </div>
         </div>
       )}

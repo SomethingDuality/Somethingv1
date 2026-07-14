@@ -144,7 +144,7 @@ export function ActionPicker({
 
         <div className="px-6 pb-5 pt-1">
           <p className="text-xs text-white/30 text-center">
-            Mutual NDAs by default · Ideas protected on-chain
+            private by default · verified proof-of-work · zero lock-in
           </p>
         </div>
       </div>

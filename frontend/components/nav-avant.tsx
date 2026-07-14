@@ -6,7 +6,8 @@ import { useState, useEffect } from "react"
 import { cn } from "@/lib/utils"
 
 const NAV_LINKS = [
-  { label: "Nothing & Something", href: "#duo" },
+  { label: "The Framework", href: "#duo" },
+  { label: "How it works", href: "#how" },
   { label: "Funding", href: "#funding" },
 ]
 
@@ -39,10 +40,10 @@ export function NavAvant() {
       <div className="mx-auto max-w-6xl px-5 sm:px-8">
         <div
           className={cn(
-            "mt-4 mb-3 flex items-center justify-between rounded-full px-4 py-2 transition-all duration-500",
+            "mt-4 flex items-center justify-between rounded-full px-4 py-2 transition-all duration-500 ease-out",
             scrolled
-              ? "border border-white/10 bg-[#0a0a0c]/80 backdrop-blur-2xl shadow-[0_8px_40px_rgba(0,0,0,0.5)]"
-              : "border border-transparent bg-transparent"
+              ? "border border-white/10 bg-gradient-to-b from-white/[0.07] to-white/[0.01] backdrop-blur-xl backdrop-saturate-[1.8] shadow-[0_8px_32px_rgba(0,0,0,0.5),_inset_0_1px_0_rgba(255,255,255,0.1)] translate-y-3"
+              : "border border-transparent bg-transparent translate-y-0"
           )}
         >
           {/* Logo — TheThing mascot */}
@@ -116,7 +117,7 @@ export function NavAvant() {
         {/* Mobile menu */}
         {open && (
           <div
-            className="md:hidden rounded-2xl border border-white/8 bg-[#0a0a0c]/90 backdrop-blur-xl mx-1 mb-3 px-5 py-4 grid gap-3"
+            className="md:hidden rounded-2xl border border-white/10 bg-gradient-to-b from-white/[0.07] to-white/[0.01] backdrop-blur-xl backdrop-saturate-[1.8] shadow-[0_8px_32px_rgba(0,0,0,0.5),_inset_0_1px_0_rgba(255,255,255,0.1)] mx-1 mb-3 px-5 py-4 grid gap-3"
             style={{ animation: "slideDown 0.25s cubic-bezier(0.16,1,0.3,1)" }}
           >
             {NAV_LINKS.map((l) => (
