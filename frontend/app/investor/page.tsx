@@ -8,6 +8,7 @@ import { TrendingUp, MessageSquare, DollarSign, Layers, ArrowRight, RefreshCw } 
 import { ConciergeRail } from "@/components/concierge-rail"
 import { cn } from "@/lib/utils"
 import { OnboardingModal } from "@/components/onboarding-modal"
+import { InvestorWeeklySummary } from "@/components/investor-weekly-summary"
 
 // ── Types ─────────────────────────────────────────────────────────────────
 interface KpiData {
@@ -325,6 +326,9 @@ export default function InvestorOverviewPage() {
               })}
             </div>
           </div>
+
+          {/* ── Weekly Signal & Thesis Digest ── */}
+          <InvestorWeeklySummary />
 
           {/* ── Pipeline ── */}
           <div className="space-y-8">
