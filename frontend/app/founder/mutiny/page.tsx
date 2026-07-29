@@ -21,6 +21,7 @@ import MutinyResults from "@/components/mutiny-results"
 import { queryMutiny, type MutinyResponse, type MutinyMode } from "@/lib/mock-mutiny"
 import { cn } from "@/lib/utils"
 import { toast } from "@/components/ui/use-toast"
+import { Corners, hudStagger, hudItem, SomethingMark } from "@/components/hud"
 
 interface AuditPoint {
   label: string
@@ -134,10 +135,10 @@ interface ChatMessage {
   role: "user" | "assistant"
   content: string
   timestamp: string
-  activeMode: MutinyMode
-  cachedResults: { [key in MutinyMode]?: MutinyResponse | null }
-  isSimulatingMode: { [key in MutinyMode]?: boolean }
-  scanLinesMode: { [key in MutinyMode]?: string[] }
+  activeMode?: MutinyMode
+  cachedResults?: Record<string, MutinyResponse | null | undefined>
+  isSimulatingMode?: Record<string, boolean | undefined>
+  scanLinesMode?: Record<string, string[] | undefined>
   uploadedFile?: { name: string; size: number } | null
 }
 
@@ -268,7 +269,7 @@ export default function FounderMutinyPage() {
       )
     )
 
-    if (lastMsg.cachedResults[newMode] || lastMsg.isSimulatingMode[newMode]) {
+    if (lastMsg.cachedResults?.[newMode] || lastMsg.isSimulatingMode?.[newMode]) {
       return
     }
 
@@ -300,7 +301,7 @@ export default function FounderMutinyPage() {
                 ...msg,
                 scanLinesMode: {
                   ...msg.scanLinesMode,
-                  [newMode]: [...(msg.scanLinesMode[newMode] || []), activeSteps[i]]
+                  [newMode]: [...(msg.scanLinesMode?.[newMode] || []), activeSteps[i]]
                 }
               }
             : msg
@@ -398,7 +399,7 @@ export default function FounderMutinyPage() {
                 ...msg,
                 scanLinesMode: {
                   ...msg.scanLinesMode,
-                  [mode]: [...(msg.scanLinesMode[mode] || []), activeSteps[i]]
+                  [mode]: [...(msg.scanLinesMode?.[mode] || []), activeSteps[i]]
                 }
               }
             : msg
@@ -507,20 +508,28 @@ export default function FounderMutinyPage() {
       <div className="pointer-events-none absolute top-12 left-1/4 w-[500px] h-[500px] rounded-full bg-violet-600/[0.03] blur-[120px] z-0" />
       <div className="pointer-events-none absolute bottom-12 right-1/4 w-[600px] h-[600px] rounded-full bg-blue-500/[0.03] blur-[150px] z-0" />
 
-      {/* Elegant Header */}
-      <div className="flex items-center justify-between pb-3 border-b border-border/10 shrink-0 pt-0.5 relative z-10">
-        <div className="flex flex-col gap-0.5">
-          <h2 className="text-xl lg:text-2xl font-serif font-light tracking-tight text-foreground leading-tight">Nothing & Something</h2>
-          <p className="text-foreground/75 dark:text-foreground/50 text-sm font-sans font-light leading-relaxed">
-            Stress-test milestone and conviction nodes against doubt critique rulesets.
-          </p>
+      {/* HUD Branded Header */}
+      <div className="flex items-center justify-between pb-4 border-b border-border/20 shrink-0 pt-0.5 relative z-10">
+        <div className="flex items-center gap-3.5">
+          <SomethingMark size={44} />
+          <div className="flex flex-col gap-0.5">
+            <div className="flex items-center gap-2">
+              <h2 className="text-xl lg:text-2xl font-serif font-light tracking-tight text-foreground leading-tight">Nothing & Something</h2>
+              <span className="text-[9px] font-mono uppercase tracking-[0.18em] text-brand-accent bg-brand-accent/10 border border-brand-accent/25 rounded px-2 py-0.5">
+                AI Dual Co-Pilot
+              </span>
+            </div>
+            <p className="text-foreground/75 dark:text-foreground/50 text-xs font-sans font-light leading-relaxed">
+              Stress-test milestone & conviction nodes with twin AI minds — <span className="text-[#8EA38E] font-medium">Something</span> (Belief) & <span className="text-[#C88E72] font-medium">Nothing</span> (Doubt).
+            </p>
+          </div>
         </div>
         {messages.length > 0 && (
           <Button
             variant="outline"
             size="sm"
             onClick={() => setMessages([])}
-            className="h-8 rounded-lg border-border hover:bg-accent text-xs font-semibold cursor-pointer text-foreground/80 hover:text-foreground transition-all shrink-0 flex items-center gap-1.5"
+            className="h-8 rounded-lg border-border/40 hover:bg-accent text-xs font-mono tracking-wide cursor-pointer text-foreground/80 hover:text-foreground transition-all shrink-0 flex items-center gap-1.5"
           >
             <RefreshCw className="h-3.5 w-3.5" />
             Reset Session
@@ -588,12 +597,15 @@ export default function FounderMutinyPage() {
                   borderColor: isActive ? item.colorHex : undefined,
                 }}
               >
-                {/* Active side indicator */}
+                {/* Active side indicator & HUD corner frame */}
                 {isActive && (
-                  <span
-                    className="absolute left-0 top-0 bottom-0 w-1"
-                    style={{ backgroundColor: item.colorHex }}
-                  />
+                  <>
+                    <Corners className="opacity-70" />
+                    <span
+                      className="absolute left-0 top-0 bottom-0 w-1"
+                      style={{ backgroundColor: item.colorHex }}
+                    />
+                  </>
                 )}
 
                 <div className="flex items-center justify-between">
@@ -747,7 +759,7 @@ export default function FounderMutinyPage() {
                             <div className="w-full space-y-3">
                               
                               {/* Case 1: Simulation loader */}
-                              {msg.isSimulatingMode[msg.activeMode] ? (
+                              {msg.activeMode && msg.isSimulatingMode?.[msg.activeMode] ? (
                                 <div className="w-full rounded-xl border border-border/20 bg-background/20 p-4 font-mono text-xs space-y-2.5 shadow-inner">
                                   <div className="flex items-center gap-2 text-foreground/50">
                                     <Loader2 className="h-3.5 w-3.5 animate-spin text-brand-accent" />
@@ -756,7 +768,7 @@ export default function FounderMutinyPage() {
                                     </span>
                                   </div>
                                   <div className="space-y-0.5 pl-2.5 border-l border-brand-accent/30 text-foreground/45">
-                                    {msg.scanLinesMode[msg.activeMode]?.map((line, idx) => (
+                                    {msg.scanLinesMode?.[msg.activeMode]?.map((line: string, idx: number) => (
                                       <div key={idx} className="break-all">&gt; {line}</div>
                                     ))}
                                   </div>
@@ -776,9 +788,9 @@ export default function FounderMutinyPage() {
                                       <span>{isExpanded ? "Hide thinking process" : "Show thinking process"}</span>
                                     </button>
                                     
-                                    {isExpanded && msg.scanLinesMode[msg.activeMode] && (
+                                    {isExpanded && msg.activeMode && msg.scanLinesMode?.[msg.activeMode] && (
                                       <div className="mt-2 p-3 bg-muted/5 rounded-xl border border-border/10 font-mono text-xs text-foreground/60 space-y-1">
-                                        {msg.scanLinesMode[msg.activeMode].map((line, idx) => (
+                                        {msg.scanLinesMode[msg.activeMode]?.map((line, idx) => (
                                           <div key={idx} className="break-all">&gt; {line}</div>
                                         ))}
                                       </div>
@@ -786,7 +798,7 @@ export default function FounderMutinyPage() {
                                   </div>
 
                                   {/* Duality Prose Copy */}
-                                  {msg.cachedResults[msg.activeMode] && (
+                                  {msg.activeMode && msg.cachedResults?.[msg.activeMode] && (
                                     <div className="text-sm sm:text-base text-foreground/90 leading-relaxed font-sans space-y-3 font-light">
                                       {msg.activeMode === "critic" && (
                                         <div className="space-y-2.5">
@@ -852,7 +864,7 @@ export default function FounderMutinyPage() {
                                   )}
 
                                   {/* Results Overlaps & Lists */}
-                                  {msg.cachedResults[msg.activeMode] && (
+                                  {msg.activeMode && msg.cachedResults?.[msg.activeMode] && (
                                     <MutinyResults data={msg.cachedResults[msg.activeMode]!} accentKey={accentKey} />
                                   )}
 
@@ -878,12 +890,13 @@ export default function FounderMutinyPage() {
             )}
           </div>
 
-          {/* Floating Chat Input Capsule */}
+          {/* Floating Chat Input Capsule with HUD Corners */}
           <div className="w-full pt-3 pb-1 shrink-0 z-20">
             <div className={cn(
-              "bg-background/85 border border-border/20 rounded-xl p-2.5 flex flex-col gap-1.5 transition focus-within:border-border/40 focus-within:bg-background shadow-lg",
+              "relative bg-background/85 border border-border/20 rounded-xl p-2.5 flex flex-col gap-1.5 transition focus-within:border-border/40 focus-within:bg-background shadow-lg overflow-hidden",
               activeAccent.ring
             )}>
+              <Corners className="opacity-50" />
               
               {/* File Pill Preview */}
               {uploadedFile && (
