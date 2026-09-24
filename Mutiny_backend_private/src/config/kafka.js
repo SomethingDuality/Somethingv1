@@ -1,16 +1,14 @@
 const { Kafka, logLevel } = require('kafkajs');
 
-if (!process.env.KAFKA_BROKERS) {
-    console.warn('[Kafka] KAFKA_BROKERS not set — defaulting to localhost:9092');
-}
+const KAFKA_ENABLED = process.env.KAFKA_ENABLED !== 'false';
 
 const kafka = new Kafka({
-    clientId: process.env.KAFKA_CLIENT_ID || 'mutiny-backend',
+    clientId: process.env.KAFKA_CLIENT_ID || 'something-backend',
     brokers: (process.env.KAFKA_BROKERS || 'localhost:9092').split(','),
     logLevel: logLevel.WARN,
     retry: {
         initialRetryTime: 300,
-        retries: 10,
+        retries: 5,
     },
 });
 
@@ -20,30 +18,38 @@ const TOPICS = {
     IDEAS:             'ideas',
     INVESTMENTS:       'investments',
     NOTIFICATIONS:     'notifications',
+    PROFILE:           'profile',
+    QUESTIONS:         'questions',
 };
 
-let producer = null;
+let producer   = null;
+let connecting = null;
 
+// Cache the producer only after connect() succeeds, so a failed first connect is retried
+// on the next publish instead of leaving a broken instance around forever.
 const getProducer = async () => {
+    if (!KAFKA_ENABLED) return null;
     if (producer) return producer;
+    if (connecting) return connecting;
 
-    producer = kafka.producer({
-        allowAutoTopicCreation: true,
-        transactionTimeout: 30000,
-    });
+    const candidate = kafka.producer({ allowAutoTopicCreation: true });
+    connecting = candidate.connect()
+        .then(() => {
+            producer = candidate;
+            console.log('[Kafka] Producer connected');
+            return producer;
+        })
+        .finally(() => { connecting = null; });
 
-    await producer.connect();
-    console.log('[Kafka] Producer connected');
-
-    return producer;
+    return connecting;
 };
 
 const disconnectProducer = async () => {
     if (producer) {
-        await producer.disconnect();
+        await producer.disconnect().catch(() => {});
         producer = null;
         console.log('[Kafka] Producer disconnected');
     }
 };
 
-module.exports = { kafka, TOPICS, getProducer, disconnectProducer };
+module.exports = { kafka, TOPICS, KAFKA_ENABLED, getProducer, disconnectProducer };

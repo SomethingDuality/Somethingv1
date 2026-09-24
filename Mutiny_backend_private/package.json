@@ -9,7 +9,8 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test --test-concurrency=1 \"test/**/*.test.js\"",
+    "dev:memory": "node scripts/dev-inmemory.js"
   },
   "repository": {
     "type": "git",
@@ -23,13 +24,18 @@
     "bcrypt": "^6.0.0",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
-    "crypto": "^1.0.1",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
     "express-rate-limit": "7.5.0",
+    "google-auth-library": "^11.1.0",
     "jsonwebtoken": "^9.0.3",
+    "kafkajs": "^2.2.4",
     "mongoose": "^9.0.1",
     "multer": "^2.2.0",
+    "redis": "^5.12.1",
     "socket.io": "^4.8.1"
+  },
+  "devDependencies": {
+    "mongodb-memory-server": "^10.4.3"
   }
 }

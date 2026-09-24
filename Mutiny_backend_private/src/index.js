@@ -1,16 +1,27 @@
 require('dotenv').config();
 
+const fs       = require('fs');
+const path     = require('path');
 const mongoose = require('mongoose');
 const app      = require('./app.js');
 const { startConsumer, stopConsumer } = require('./workers/kafkaConsumer.js');
 const { disconnectProducer }          = require('./config/kafka.js');
+const { connectRedis, disconnectRedis } = require('./config/redis.js');
 
-const PORT      = process.env.PORT      || 5000;
+// 5050, not 5000: macOS AirPlay Receiver (ControlCenter) already listens on 5000.
+const PORT      = process.env.PORT      || 5050;
 const MONGO_URI = process.env.MONGO_URI;
 
-if (!MONGO_URI) {
-	console.error('MONGO_URI is not set in .env');
-	process.exit(1);
+for (const name of ['MONGO_URI', 'ACCESS_TOKEN_SECRET', 'REFRESH_TOKEN_SECRET']) {
+	if (!process.env[name]) {
+		console.error(`${name} is not set in .env (see .env.example)`);
+		process.exit(1);
+	}
+}
+
+// multer's diskStorage doesn't create folders; without these, uploads fail with ENOENT.
+for (const dir of ['avatars', 'ideas']) {
+	fs.mkdirSync(path.join(__dirname, '../uploads', dir), { recursive: true });
 }
 
 
@@ -44,12 +55,16 @@ mongoose.connection.on('error', (err) => {
 });
 
 
+let server = null;
+
 const gracefulShutdown = async (signal) => {
 	console.log(`[${signal}] Shutting down...`);
-	await Promise.all([
-		mongoose.connection.close(),
+	if (server) await new Promise((resolve) => server.close(resolve));
+	await Promise.allSettled([
 		stopConsumer(),
 		disconnectProducer(),
+		disconnectRedis(),
+		mongoose.connection.close(),
 	]);
 	console.log('[Shutdown] All connections closed');
 	process.exit(0);
@@ -59,12 +74,17 @@ process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
 
+// Mongo is the only hard dependency. Redis (cache) and Kafka (side effects) connect in the
+// background: the API serves without them and each logs its own failure.
 mongoose
 	.connect(MONGO_URI, MONGO_OPTIONS)
-	.then(async () => {
-		await startConsumer();
-		app.listen(PORT, () => {
+	.then(() => {
+		server = app.listen(PORT, () => {
 			console.log(`[Server] Running on port ${PORT} (NODE_ENV: ${process.env.NODE_ENV || 'development'})`);
+		});
+		connectRedis();
+		startConsumer().catch((err) => {
+			console.error('[Kafka] consumer failed to start — events run in-process:', err.message);
 		});
 	})
 	.catch((err) => {

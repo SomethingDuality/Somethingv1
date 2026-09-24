@@ -47,7 +47,9 @@ const BaseUserSchema = new mongoose.Schema({
 	notifications: [{
 		_id:       { type: mongoose.Schema.Types.ObjectId, default: () => new mongoose.Types.ObjectId() },
 		text:      { type: String, required: true },
-		timestamp: { type: Date,   default: Date.now }
+		timestamp: { type: Date,   default: Date.now },
+		// Idempotency key: the same event replayed never creates a second notification.
+		key:       { type: String },
 	}],
 
 	
