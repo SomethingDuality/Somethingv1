@@ -3,3 +3,11 @@ package-lock.json
 uploads/*
 !uploads/avatars/.gitkeep
 .env
+
+# editor backups / swap / undo files
+*~
+*.swp
+*.un~
+
+# macOS Finder metadata
+.DS_Store

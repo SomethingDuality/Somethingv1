@@ -1,0 +1,10 @@
+chat/.state.json
+chat/prompts.md
+
+# editor backups / swap / undo files (they can hold .env history)
+*~
+*.swp
+*.un~
+
+# macOS Finder metadata
+.DS_Store
