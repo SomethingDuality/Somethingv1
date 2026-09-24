@@ -4,6 +4,10 @@ const { Investor }  = require('../models/user.model.js');
 const { Idea }      = require('../models/ideas.model.js');
 const { pushNotification } = require('./notifications.controller.js');
 const { incrementTrust }   = require('../utils/trust.util.js');
+const {
+    publishInvestmentCommitted,
+    publishInvestmentReleased,
+} = require('../utils/kafkaProducer.js');
 
 
 const assertInvestor = (req, res) => {
@@ -90,6 +94,12 @@ const commit = async (req, res) => {
 				`${investorName}${firmSuffix} committed $${Number(amount).toLocaleString()} to your idea "${idea.title}"`
 			);
 		}
+
+		publishInvestmentCommitted({
+			investorId: req.user._id.toString(),
+			ideaId:     ideaId,
+			amount:     Number(amount),
+		});
 
 		return res.status(201).json({
 			success: true,
@@ -237,7 +247,14 @@ async function release(req, res) {
 		
 		await incrementTrust(req.user._id, { escrowReleases: 1 });
 
-		
+		publishInvestmentReleased({
+			investorId:    req.user._id.toString(),
+			ideaId:        investment.idea_id.toString(),
+			investmentId:  investmentId,
+			amount:        releaseAmount,
+		});
+
+		// Notify the founder
 		const idea = await Idea.findById(investment.idea_id).select('title founder_id').lean();
 		if (idea?.founder_id) {
 			const investor = await Investor

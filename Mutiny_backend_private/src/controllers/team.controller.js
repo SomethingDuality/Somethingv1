@@ -3,6 +3,7 @@ const { Team }    = require('../models/team.model.js');
 const { Idea }    = require('../models/ideas.model.js');
 const { BaseUser, Founder } = require('../models/user.model.js');
 const { pushNotification } = require('./notifications.controller.js');
+const client = require('../config/redis.js');
 
 
 
@@ -192,8 +193,6 @@ const update_team = async (req, res) => {
 	}
 };
 
-
-
 const delete_team = async (req, res) => {
 	if (!assertFounder(req, res)) return;
 
@@ -236,82 +235,66 @@ const delete_team = async (req, res) => {
 };
 
 
-
-
-const add_member = async (req, res) => {
-	if (!assertFounder(req, res)) return;
-
+const add_member = async(req, res)=>{
+	if(!assertFounder(req, res)) return;
+	
 	const { id } = req.params;
 	const { user_id, role } = req.body;
 
-	if (!mongoose.Types.ObjectId.isValid(id)) {
+	if(!mongoose.Types.ObjectId.isValid(id)){
 		return res.status(400).json({ success: false, message: 'Invalid team ID' });
 	}
-	if (!user_id || !mongoose.Types.ObjectId.isValid(user_id)) {
+	if(!user_id || !mongoose.Types.ObjectId.isValid(user_id)){
 		return res.status(400).json({ success: false, message: 'Valid user_id is required' });
 	}
-	if (!role || typeof role !== 'string' || !role.trim()) {
+	if(!role || typeof role !== 'string' || !role.trim()){
 		return res.status(400).json({ success: false, message: 'role is required' });
 	}
 
-	try {
-		const team = await Team.findById(id);
-		if (!team) {
-			return res.status(404).json({ success: false, message: 'Team not found' });
-		}
-
-		if (team.founder_id.toString() !== req.user._id.toString()) {
-			return res.status(403).json({ success: false, message: 'Only the team owner can add members' });
-		}
-
-		
+	try{
 		const user = await BaseUser.findById(user_id).select('name').lean();
-		if (!user) {
+		if(!user){
 			return res.status(404).json({ success: false, message: 'User not found' });
 		}
+		const filter = {_id: id, founder_id: req.user._id, 'members.user_id': {$ne: user_id}};
+		const memberObj =  {
+			user_id,
+			name: user.name,
+			initials: getInitials(user.name),
+			role: role.trim(),
+			lastActive: new Date()
+		};
 
-		
-		const alreadyMember = team.members.some(m => m.user_id.toString() === user_id);
-		if (alreadyMember) {
-			return res.status(409).json({
-				success: false,
-				message: 'User is already a member of this team'
-			});
+		const doc = await Team.findOneAndUpdate(
+			filter,
+			{ $push: { members: memberObj } },
+			{ new: true }
+		);
+
+		if(!doc){
+			return res.status(404).json({ success: false, message: 'Team not found or user is already a member' });
 		}
 
-		
-		team.members.push({
-			user_id,
-			name:       user.name,
-			initials:   getInitials(user.name),
-			role:       role.trim(),
-			lastActive: new Date()
-		});
-		await team.save();
-
-		
 		await BaseUser.findByIdAndUpdate(user_id, {
-			$addToSet: { teams: team._id }
+			$addToSet: { teams: doc._id }
 		});
 
-		
 		await pushNotification(
 			user_id,
-			`You were added to the team "${team.name}" as ${role.trim()}`
+			`You were added to the team "${doc.name}" as ${role.trim()}`
 		);
 
 		return res.status(200).json({
 			success: true,
 			message: 'Member added',
-			team: team.toObject()
+			team: doc.toObject()
 		});
 
-	} catch (err) {
+	} catch(err){
 		console.error('add_member:', err);
 		return res.status(500).json({ success: false, message: 'Internal server error' });
 	}
-};
-
+}
 
 
 const remove_member = async (req, res) => {

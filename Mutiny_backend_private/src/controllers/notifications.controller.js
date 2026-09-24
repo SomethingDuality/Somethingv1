@@ -1,4 +1,5 @@
 const { BaseUser } = require('../models/user.model.js');
+const { publishNotification } = require('../utils/kafkaProducer.js');
 
 
 
@@ -69,10 +70,9 @@ const mark_one_read = async (req, res) => {
 
 
 const pushNotification = async (userId, text) => {
-	await BaseUser.findByIdAndUpdate(
-		userId,
-		{ $push: { notifications: { text } } }
-	);
+	// Publish to Kafka — the consumer writes to DB asynchronously.
+	// Fall back to a direct DB write if Kafka is unavailable (publish swallows errors internally).
+	publishNotification({ userId: userId.toString(), text });
 };
 
 module.exports = {

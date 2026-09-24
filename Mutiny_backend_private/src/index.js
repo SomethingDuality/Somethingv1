@@ -2,6 +2,8 @@ require('dotenv').config();
 
 const mongoose = require('mongoose');
 const app      = require('./app.js');
+const { startConsumer, stopConsumer } = require('./workers/kafkaConsumer.js');
+const { disconnectProducer }          = require('./config/kafka.js');
 
 const PORT      = process.env.PORT      || 5000;
 const MONGO_URI = process.env.MONGO_URI;
@@ -43,9 +45,13 @@ mongoose.connection.on('error', (err) => {
 
 
 const gracefulShutdown = async (signal) => {
-	console.log(`[${signal}] Closing MongoDB connection pool...`);
-	await mongoose.connection.close();
-	console.log('[MongoDB] Connection pool closed');
+	console.log(`[${signal}] Shutting down...`);
+	await Promise.all([
+		mongoose.connection.close(),
+		stopConsumer(),
+		disconnectProducer(),
+	]);
+	console.log('[Shutdown] All connections closed');
 	process.exit(0);
 };
 
@@ -55,7 +61,8 @@ process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
 mongoose
 	.connect(MONGO_URI, MONGO_OPTIONS)
-	.then(() => {
+	.then(async () => {
+		await startConsumer();
 		app.listen(PORT, () => {
 			console.log(`[Server] Running on port ${PORT} (NODE_ENV: ${process.env.NODE_ENV || 'development'})`);
 		});

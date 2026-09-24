@@ -3,8 +3,12 @@ const { Idea }    = require('../models/ideas.model.js');
 const { Like }    = require('../models/likes.model.js');
 const { Founder, BaseUser } = require('../models/user.model.js');
 const { pushNotification } = require('./notifications.controller.js');
-
-
+const client = require('../config/redis.js');
+const {
+    publishIdeaCreated,
+    publishIdeaUpdated,
+    publishIdeaDeleted,
+} = require('../utils/kafkaProducer.js');
 
 const makeExcerpt = (text = '', limit = 120) =>
 	text.length > limit ? text.slice(0, limit) + '...' : text;
@@ -16,23 +20,38 @@ const requireFounder = async (user_id) => {
 
 
 const fetch_user_ideas = async (req, res) => {
-	const user_id = req.user._id;
+    const user_id = req.user._id;
+    const key = `user_ideas:${user_id}`;
 
-	try {
-		const founder = await requireFounder(user_id);
-		if (!founder) {
-			return res.status(403).json({ success: false, message: 'Founder account required' });
-		}
+    try {
+        try {
+            const cached = await client.get(key);
+            if (cached) {
+                return res.status(200).json(JSON.parse(cached));
+            }
+        } catch (err) {
+            console.error('Redis cache fetch error:', err);
+        }
 
-		const ideas = await Idea.find({ founder_id: user_id })
-			.sort({ createdAt: -1 })
-			.lean();
+        const founder = await requireFounder(user_id);
+        if (!founder) {
+            return res.status(403).json({ success: false, message: 'Founder account required' });
+        }
 
-		return res.status(200).json(ideas);
-	} catch (err) {
-		console.error('fetch_user_ideas:', err);
-		return res.status(500).json({ success: false, message: 'Internal server error' });
-	}
+        const ideas = await Idea.find({ founder_id: user_id })
+            .sort({ createdAt: -1 })
+            .lean();
+
+        client.setEx(key, 3600, JSON.stringify(ideas)).catch(err => {
+            console.error('Redis setEx error:', err);
+        });
+
+        return res.status(200).json(ideas);
+
+    } catch (error) {
+        console.error('fetch_user_ideas error:', error);
+        return res.status(500).json({ success: false, message: 'Internal server error' });
+    }
 };
 
 
@@ -127,6 +146,14 @@ const create_idea = async (req, res) => {
 
 		await idea.save();
 
+		publishIdeaCreated({
+			ideaId:    idea._id.toString(),
+			founderId: user_id.toString(),
+			title:     idea.title,
+			stage:     idea.stage,
+			tags:      idea.tags,
+		});
+
 		return res.status(201).json(idea.toObject());
 	} catch (err) {
 		console.error('create_idea:', err);
@@ -172,6 +199,19 @@ const update_idea = async (req, res) => {
 
 		await idea.save();
 
+		publishIdeaUpdated({
+			ideaId:  id,
+			changes: {
+				...(title       !== undefined && { title:       idea.title }),
+				...(description !== undefined && { description: true }),
+				...(stage       !== undefined && { stage:       idea.stage }),
+				...(tags        !== undefined && { tags:        idea.tags }),
+				...(lookingFor  !== undefined && { lookingFor:  idea.lookingFor }),
+				...(isDraft     !== undefined && { isDraft:     idea.isDraft }),
+				...(attachments !== undefined && { attachments: true }),
+			},
+		});
+
 		return res.status(200).json(idea.toObject());
 	} catch (err) {
 		console.error('update_idea:', err);
@@ -198,6 +238,8 @@ const delete_idea = async (req, res) => {
 		}
 
 		await idea.deleteOne();
+
+		publishIdeaDeleted({ ideaId: id, founderId: user_id.toString() });
 
 		return res.status(200).json({ success: true, message: 'Idea deleted' });
 	} catch (err) {
