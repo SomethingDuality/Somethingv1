@@ -4,15 +4,20 @@ const { Team }    = require('../models/team.model.js');
 const { Portfolio } = require('../models/portfolio.model.js');
 
 
+const { applyUpdate, FieldError } = require('../profile/applyUpdate.js');
+const tax = require('../shared/taxonomy.js');
+
 const PROFILE_SELECT =
 	'name email avatar plan ' +
 	'headline location about socials ' +
 	'skills interests work_experience education ' +
-	'expertise experience_level occupation github ' +
+	'expertise experience_level occupation github linkedin ' +
 	'profileCompletion isVerified githubVerified walletVerified ' +
-	'createdAt';
+	'fieldSources createdAt';
 
 
+// Old signups stored linkedin/github/expertise at the top level; read them as fallbacks so
+// nobody has to retype what they already gave us (scripts/migrate-profile-fields.js moves them).
 const toProfileShape = (doc) => ({
 	name:              doc.name              || '',
 	email:             doc.email             || '',
@@ -22,29 +27,33 @@ const toProfileShape = (doc) => ({
 	location:          doc.location          || '',
 	about:             doc.about             || '',
 	socials: {
-		linkedin: doc.socials?.linkedin || '',
+		linkedin: doc.socials?.linkedin || doc.linkedin || '',
 		twitter:  doc.socials?.twitter  || '',
-		website:  doc.socials?.website  || ''
+		website:  doc.socials?.website  || '',
+		github:   doc.socials?.github   || doc.github   || '',
 	},
-	skills:            doc.skills            || [],
-	interests:         doc.interests         || [],
-	experience:        doc.work_experience   || [],   
+	skills:            tax.normalizeList('skills', [...(doc.skills || []), ...(doc.expertise || [])]),
+	interests:         tax.normalizeList('sectors', doc.interests || []),
+	experience_level:  doc.experience_level  || '',
+	occupation:        doc.occupation        || '',
+	experience:        doc.work_experience   || [],
 	education:         doc.education         || [],
 	isVerified:        doc.isVerified        || false,
 	githubVerified:    doc.githubVerified     || false,
 	walletVerified:    doc.walletVerified     || false,
-	profileCompletion: doc.profileCompletion || 0,
+	// Derived on every read, so it is right for new accounts and when the weights change.
+	profileCompletion: computeCompletion(doc),
 });
 
 
 const computeCompletion = (doc) => {
 	let score = 0;
-	if (doc.name)                               score += 15;
-	if (doc.about && doc.about.length > 10)     score += 20;
-	if (doc.work_experience?.length > 0)        score += 20;
-	if (doc.education?.length > 0)              score += 15;
-	if (doc.githubVerified)                     score += 15;
-	if (doc.walletVerified)                     score += 15;
+	// Only what a founder can do today counts: GitHub/wallet verification is "Coming soon".
+	// Same weights as getDynamicCompletion in frontend/app/founder/profile/page.tsx.
+	if (doc.name)                               score += 20;
+	if (doc.about && doc.about.length > 10)     score += 30;
+	if (doc.work_experience?.length > 0)        score += 30;
+	if (doc.education?.length > 0)              score += 20;
 	return Math.min(score, 100);
 };
 
@@ -81,116 +90,41 @@ const get_profile = async (req, res) => {
 
 
 
+// Body fields map onto registry paths; everything is validated in profile/fields.js.
+const FOUNDER_BODY_PATHS = {
+	name: 'name', headline: 'headline', location: 'location', about: 'about',
+	skills: 'skills', interests: 'interests', experience: 'work_experience', education: 'education',
+	experience_level: 'experience_level', occupation: 'occupation',
+};
+
 const update_profile = async (req, res) => {
 	if (!assertFounder(req, res)) return;
 
-	const {
-		name,
-		headline,
-		location,
-		about,
-		socials,
-		skills,
-		interests,
-		experience,   
-		education
-	} = req.body;
-
-	
-	const updates = {};
-
-	if (name !== undefined) {
-		if (typeof name !== 'string' || !name.trim()) {
-			return res.status(400).json({ success: false, message: 'name must be a non-empty string' });
-		}
-		updates.name = name.trim();
+	const body = req.body || {};
+	const patch = {};
+	for (const [key, path] of Object.entries(FOUNDER_BODY_PATHS)) {
+		if (body[key] !== undefined) patch[path] = body[key];
 	}
-
-	if (headline  !== undefined) updates.headline = String(headline).trim();
-	if (location  !== undefined) updates.location = String(location).trim();
-	if (about     !== undefined) updates.about    = String(about).trim();
-
-	if (socials !== undefined) {
-		if (typeof socials !== 'object' || Array.isArray(socials)) {
+	if (body.socials !== undefined) {
+		if (!body.socials || typeof body.socials !== 'object' || Array.isArray(body.socials)) {
 			return res.status(400).json({ success: false, message: 'socials must be an object' });
 		}
-		updates.socials = {
-			linkedin: String(socials.linkedin || '').trim(),
-			twitter:  String(socials.twitter  || '').trim(),
-			website:  String(socials.website  || '').trim()
-		};
+		for (const k of ['linkedin', 'twitter', 'website', 'github']) {
+			if (body.socials[k] !== undefined) patch[`socials.${k}`] = body.socials[k];
+		}
 	}
 
-	if (skills !== undefined) {
-		if (!Array.isArray(skills)) {
-			return res.status(400).json({ success: false, message: 'skills must be an array' });
-		}
-		updates.skills = skills.map(String);
-	}
-
-	if (interests !== undefined) {
-		if (!Array.isArray(interests)) {
-			return res.status(400).json({ success: false, message: 'interests must be an array' });
-		}
-		updates.interests = interests.map(String);
-	}
-
-	if (experience !== undefined) {
-		if (!Array.isArray(experience)) {
-			return res.status(400).json({ success: false, message: 'experience must be an array' });
-		}
-		
-		for (const item of experience) {
-			if (!item.role || !item.company) {
-				return res.status(400).json({
-					success: false,
-					message: 'Each experience entry requires role and company'
-				});
-			}
-		}
-		updates.work_experience = experience;
-	}
-
-	if (education !== undefined) {
-		if (!Array.isArray(education)) {
-			return res.status(400).json({ success: false, message: 'education must be an array' });
-		}
-		for (const item of education) {
-			if (!item.institution || !item.degree) {
-				return res.status(400).json({
-					success: false,
-					message: 'Each education entry requires institution and degree'
-				});
-			}
-		}
-		updates.education = education;
-	}
-
-	if (Object.keys(updates).length === 0) {
+	if (Object.keys(patch).length === 0) {
 		return res.status(400).json({ success: false, message: 'No valid fields provided' });
 	}
 
 	try {
-		const doc = await Founder
-			.findByIdAndUpdate(
-				req.user._id,
-				{ $set: updates },
-				{ new: true, runValidators: true }
-			)
-			.select(PROFILE_SELECT)
-			.lean();
-
-		if (!doc) {
-			return res.status(404).json({ success: false, message: 'Profile not found' });
-		}
-
-		
-		const completion = computeCompletion(doc);
-		await Founder.findByIdAndUpdate(req.user._id, { profileCompletion: completion });
-		doc.profileCompletion = completion;
+		const doc = await applyUpdate({ userId: req.user._id, role: 'Founder', patch, source: 'profile' });
+		if (!doc) return res.status(404).json({ success: false, message: 'Profile not found' });
 
 		return res.status(200).json(toProfileShape(doc));
 	} catch (err) {
+		if (err instanceof FieldError) return res.status(422).json({ success: false, field: err.path, message: err.message });
 		console.error('update_profile:', err);
 		return res.status(500).json({ success: false, message: 'Internal server error' });
 	}

@@ -31,6 +31,10 @@ const BaseUserSchema = new mongoose.Schema({
 	passwordResetTokenHash: { type: String, select: false },
 	passwordResetExpires:   { type: Date,   select: false },
 
+	// Where each user-set value came from: { source: signup|profile|question|google|legacy|agent, at }.
+	// A field with a schema default counts as "known" only once it appears here.
+	fieldSources: { type: Map, of: new mongoose.Schema({ source: String, at: Date }, { _id: false }), default: undefined },
+
 	// Set only by the server. Everything is free for now; signup never reads this from the body.
 	plan: {
 		type: String,
@@ -113,7 +117,8 @@ const founderSchema = new mongoose.Schema({
 	socials: {
 		linkedin: { type: String, default: '' },
 		twitter:  { type: String, default: '' },
-		website:  { type: String, default: '' }
+		website:  { type: String, default: '' },
+		github:   { type: String, default: '' }
 	},
 
 	skills:    [{ type: String }],

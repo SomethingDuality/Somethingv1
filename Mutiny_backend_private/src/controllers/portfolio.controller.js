@@ -21,6 +21,13 @@ const assertInvestor = (req, res) => {
 
 
 
+// Finite and bounded: "Infinity" passes an isNaN check and would be stored (and served as null).
+const MAX_AMOUNT = 1e9;
+const validAmount = (amount) => {
+	const n = Number(amount);
+	return Number.isFinite(n) && n > 0 && n <= MAX_AMOUNT;
+};
+
 const commit = async (req, res) => {
 	if (!assertInvestor(req, res)) return;
 
@@ -29,8 +36,8 @@ const commit = async (req, res) => {
 	if (!ideaId || !mongoose.Types.ObjectId.isValid(ideaId)) {
 		return res.status(400).json({ success: false, message: 'Valid ideaId is required' });
 	}
-	if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) {
-		return res.status(400).json({ success: false, message: 'amount must be a positive number' });
+	if (!validAmount(amount)) {
+		return res.status(400).json({ success: false, message: 'Enter an amount between $1 and $1,000,000,000' });
 	}
 
 	try {
@@ -210,8 +217,8 @@ async function release(req, res) {
 	if (!mongoose.Types.ObjectId.isValid(investmentId)) {
 		return res.status(400).json({ success: false, message: 'Invalid investment ID' });
 	}
-	if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) {
-		return res.status(400).json({ success: false, message: 'amount must be a positive number' });
+	if (!validAmount(amount)) {
+		return res.status(400).json({ success: false, message: 'Enter an amount between $1 and $1,000,000,000' });
 	}
 
 	try {
