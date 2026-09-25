@@ -1,37 +1,17 @@
 const { BaseUser, Founder, Investor } = require('../models/user.model.js');
-const { hashPassword, comparePasswords } = require('../utils/password.util.js');
+const { hashPassword, comparePasswords, validatePassword } = require('../utils/password.util.js');
 const {
 	generateAccessToken,
 	generateRefreshToken,
-	generateResetToken,
 	verifyAccessToken,
 	verifyRefreshToken,
-	verifyResetToken,
 } = require('../utils/jwt.util.js');
+const { createResetToken, hashResetToken } = require('../utils/resetToken.util.js');
+const mailer = require('../utils/mailer.js');
+const google = require('../auth/google.js');
 
-
-
-const PASSWORD_REGEX = /^(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?`~]).{8,}$/;
-
-const validatePassword = (password) => {
-	if (typeof password !== 'string' || password.length < 8) {
-		return 'Password must be at least 8 characters';
-	}
-	if (!/[A-Z]/.test(password)) {
-		return 'Password must contain at least one uppercase letter';
-	}
-	if (!/\d/.test(password)) {
-		return 'Password must contain at least one number';
-	}
-	if (!/[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?`~]/.test(password)) {
-		return 'Password must contain at least one special character';
-	}
-	if (!PASSWORD_REGEX.test(password)) {
-		return 'Password does not meet complexity requirements';
-	}
-	return null;
-};
-
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const MAX_NAME = 100;
 
 const REFRESH_COOKIE_OPTS = {
 	httpOnly: true,
@@ -47,223 +27,134 @@ const ACCESS_COOKIE_OPTS = {
 	maxAge: 15 * 60 * 1000 
 };
 
+const publicUser = (user) => ({
+	_id:  user._id,
+	name: user.name,
+	email: user.email,
+	role: user.role,
+	plan: user.plan,
+});
 
+// Issues a fresh token pair, stores the refresh token and sets both cookies.
+const startSession = async (res, user) => {
+	const accessToken  = generateAccessToken(user);
+	const refreshToken = generateRefreshToken(user);
+	await BaseUser.updateOne({ _id: user._id }, { $set: { refreshToken } });
+	res.cookie('accessToken',  accessToken,  ACCESS_COOKIE_OPTS);
+	res.cookie('refreshToken', refreshToken, REFRESH_COOKIE_OPTS);
+};
+
+const normalizeRole = (role) => {
+	const r = String(role || '').toLowerCase();
+	return r === 'founder' || r === 'investor' ? r : null;
+};
+
+
+// Minimal signup: name, email, password, role, terms. Everything else is asked later, one
+// optional question at a time, by the Something box. `plan` is never read from the client.
 const signup = async (req, res) => {
+	const { name, email, password, role, accepted_terms } = req.body || {};
 
-	const {
-		name,
-		email,
-		password,
-		role,
-		plan,
-		age,
-		linkedin,
-		accepted_terms,
-		expertise,
-		experience,
-		occupation,
-		github,
-		firm,
-		interests,
-		invest_stage,
-		twitter,
-	} = req.body;
+	const cleanName  = typeof name === 'string' ? name.trim() : '';
+	const cleanEmail = typeof email === 'string' ? email.toLowerCase().trim() : '';
+	const cleanRole  = normalizeRole(role);
 
-	if (!name || !email || !password || !role) {
-		return res.status(400).json({
-			success: false,
-			message: 'name, email, password and role are required'
-		});
+	if (!cleanName || !cleanEmail || !password || !role) {
+		return res.status(400).json({ success: false, message: 'name, email, password and role are required' });
 	}
-
-	if (!['founder', 'investor'].includes(role.toLowerCase())) {
-		return res.status(400).json({
-			success: false,
-			message: 'role must be either "founder" or "investor"'
-		});
+	if (cleanName.length > MAX_NAME) {
+		return res.status(400).json({ success: false, message: `Name must be at most ${MAX_NAME} characters` });
 	}
-
-	if (password.length < 8) {
-		return res.status(400).json({
-			success: false,
-			message: 'Password must be at least 8 characters'
-		});
+	if (!EMAIL_RE.test(cleanEmail)) {
+		return res.status(400).json({ success: false, message: 'Please enter a valid email address' });
 	}
-
+	if (!cleanRole) {
+		return res.status(400).json({ success: false, message: 'role must be either "founder" or "investor"' });
+	}
+	const pwError = validatePassword(password, { email: cleanEmail });
+	if (pwError) {
+		return res.status(400).json({ success: false, message: pwError });
+	}
 	if (!accepted_terms) {
-		return res.status(400).json({
-			success: false,
-			message: 'You must accept the terms and conditions'
-		});
+		return res.status(400).json({ success: false, message: 'You must accept the terms and conditions' });
 	}
-
-	if (role.toLowerCase() === 'founder' && (!expertise || expertise.length === 0)) {
-		return res.status(400).json({
-			success: false,
-			message: 'Founders must provide at least one area of expertise'
-		});
-	}
-
 
 	try {
-		console.log('[SIGNUP] Checking for existing account:', email.toLowerCase().trim());
-		const existing = await BaseUser.findOne({ email: email.toLowerCase().trim() });
+		const existing = await BaseUser.findOne({ email: cleanEmail }).select('_id').lean();
 		if (existing) {
-			return res.status(409).json({
-				success: false,
-				message: 'An account with this email already exists'
-			});
-		}
-		const hashed = await hashPassword(password);
-
-		const baseFields = {
-			name:           name.trim(),
-			email:          email.toLowerCase().trim(),
-			password:       hashed,
-			plan:           plan || 'free',
-			accepted_terms: Boolean(accepted_terms),
-			linkedin:       linkedin  || undefined,
-			age:            age       || undefined,
-		};
-
-		let newUser;
-
-		if (role.toLowerCase() === 'founder') {
-			console.log('[SIGNUP] Creating Founder with expertise:', expertise);
-			newUser = new Founder({
-				...baseFields,
-				expertise:   Array.isArray(expertise) ? expertise : [],
-				experience:  experience  || undefined,
-				occupation:  occupation  || undefined,
-				github:      github      || undefined,
-			});
-		} else {
-			console.log('[SIGNUP] Creating Investor with firm:', firm, '| invest_stage:', invest_stage);
-			newUser = new Investor({
-				...baseFields,
-				firm:          firm         || undefined,
-				interests:     Array.isArray(interests) ? interests : [],
-				invest_stage:  invest_stage || undefined,
-				twitter:       twitter      || undefined,
-			});
+			return res.status(409).json({ success: false, message: 'An account with this email already exists' });
 		}
 
-		console.log('[SIGNUP] Generating tokens...');
-		const accessToken  = generateAccessToken(newUser);
-		const refreshToken = generateRefreshToken(newUser);
-
-		newUser.refreshToken = refreshToken;
-
-		await newUser.save();
-
-		console.log('[SIGNUP] Setting cookies (NODE_ENV=%s) sameSite=%s secure=%s',
-			process.env.NODE_ENV,
-			ACCESS_COOKIE_OPTS.sameSite,
-			ACCESS_COOKIE_OPTS.secure
-		);
-		res.cookie('accessToken',  accessToken,  ACCESS_COOKIE_OPTS);
-		res.cookie('refreshToken', refreshToken, REFRESH_COOKIE_OPTS);
-
-		return res.status(201).json({
-			success: true,
-			message: 'Account created successfully',
-			user: {
-				_id:  newUser._id,
-				name: newUser.name,
-				email: newUser.email,
-				role: newUser.role,
-				plan: newUser.plan,
-			}
+		const Model = cleanRole === 'founder' ? Founder : Investor;
+		const newUser = await Model.create({
+			name:           cleanName,
+			email:          cleanEmail,
+			password:       await hashPassword(password),
+			plan:           'free',
+			accepted_terms: true,
+			authProviders:  ['password'],
 		});
 
+		await startSession(res, newUser);
+
+		return res.status(201).json({ success: true, message: 'Account created successfully', user: publicUser(newUser) });
 	} catch (err) {
-		return res.status(500).json({
-			success: false,
-			message: 'Something went wrong, please try again'
-		});
+		if (err && err.code === 11000) {
+			return res.status(409).json({ success: false, message: 'An account with this email already exists' });
+		}
+		console.error('[SIGNUP] error:', err);
+		return res.status(500).json({ success: false, message: 'Something went wrong, please try again' });
 	}
 };
 
 const login = async (req, res) => {
-	let { email, password } = req.body;
-
+	let { email, password } = req.body || {};
 
 	if (!email || !password) {
-		return res.status(400).json({
-			success: false,
-			message: 'Email and password are required'
-		});
+		return res.status(400).json({ success: false, message: 'Email and password are required' });
 	}
 
-	email = email.toLowerCase().trim();
+	email = String(email).toLowerCase().trim();
 
 	try {
-		console.log('[LOGIN] Looking up user in DB...');
 		const user = await BaseUser.findOne({ email });
-
 		if (!user) {
-			return res.status(401).json({
-				success: false,
-				message: 'Invalid credentials'
-			});
+			return res.status(401).json({ success: false, message: 'Invalid credentials' });
 		}
 
-		console.log('[LOGIN] Comparing passwords...');
+		if (!user.password) {
+			return res.status(401).json({ success: false, code: 'GOOGLE_ONLY', message: 'This account uses Continue with Google' });
+		}
+
 		const valid = await comparePasswords(password, user.password);
 		if (!valid) {
-			return res.status(401).json({
-				success: false,
-				message: 'Invalid credentials'
-			});
+			return res.status(401).json({ success: false, message: 'Invalid credentials' });
 		}
 
-		const accessToken  = generateAccessToken(user);
-		const refreshToken = generateRefreshToken(user);
+		await startSession(res, user);
 
-		user.refreshToken = refreshToken;
-		await user.save();
-
-		console.log('[LOGIN] Setting cookies (NODE_ENV=%s) sameSite=%s secure=%s',
-			process.env.NODE_ENV,
-			ACCESS_COOKIE_OPTS.sameSite,
-			ACCESS_COOKIE_OPTS.secure
-		);
-		res.cookie('accessToken',  accessToken,  ACCESS_COOKIE_OPTS);
-		res.cookie('refreshToken', refreshToken, REFRESH_COOKIE_OPTS);
-
-		return res.status(200).json({
-			success: true,
-			message: 'Logged in successfully',
-			user: {
-				_id:  user._id,
-				name: user.name,
-				email: user.email,
-				role: user.role,
-				plan: user.plan,
-			}
-		});
-
+		return res.status(200).json({ success: true, message: 'Logged in successfully', user: publicUser(user) });
 	} catch (err) {
-		console.error('[LOGIN] 💥 Unexpected error:', err.message);
-		return res.status(500).json({
-			success: false,
-			message: 'Something went wrong, please try again'
-		});
+		console.error('[LOGIN] error:', err.message);
+		return res.status(500).json({ success: false, message: 'Something went wrong, please try again' });
 	}
 };
 
 const me = async (req, res) => {
 	try {
-		const user = await BaseUser.findById(req.user._id).select('-password -refreshToken');
+		const user = await BaseUser.findById(req.user._id).select('-refreshToken');
 		if (!user) {
 			return res.status(404).json({ success: false, message: 'User not found' });
 		}
 		return res.status(200).json({
-			id:    user._id,
-			name:  user.name,
-			email: user.email,
-			role:  user.role,
-			plan:  user.plan,
+			id:            user._id,
+			name:          user.name,
+			email:         user.email,
+			role:          user.role,
+			plan:          user.plan,
+			avatarUrl:     user.avatar || null,
+			hasPassword:   Boolean(user.password),
+			authProviders: user.authProviders?.length ? user.authProviders : ['password'],
 		});
 	} catch (err) {
 		console.error('[ME] 💥 Error:', err.message);
@@ -358,6 +249,8 @@ module.exports = {
 	refresh,
 	forgot_password,
 	reset_password,
+	change_password,
+	google_auth,
 	delete_account,
 };
 
@@ -412,21 +305,8 @@ async function refresh(req, res) {
 			});
 		}
 
-		
-		const newAccessToken  = generateAccessToken(user);
-		const newRefreshToken = generateRefreshToken(user);
 
-		user.refreshToken = newRefreshToken;
-		await user.save();
-
-		const COOKIE_BASE = {
-			httpOnly: true,
-			secure:   process.env.NODE_ENV === 'production',
-			sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax',
-		};
-
-		res.cookie('accessToken',  newAccessToken,  { ...COOKIE_BASE, maxAge: 15 * 60 * 1000 });
-		res.cookie('refreshToken', newRefreshToken, { ...COOKIE_BASE, maxAge: 7 * 24 * 60 * 60 * 1000 });
+		await startSession(res, user);
 
 		return res.status(200).json({ success: true });
 
@@ -440,40 +320,31 @@ async function refresh(req, res) {
 
 
 
+// Always answers the same way, whether or not the account exists (no user enumeration).
+// The reset link is emailed; the token is never returned to the client.
 async function forgot_password(req, res) {
-	const { email } = req.body;
+	const { email } = req.body || {};
 
 	if (!email) {
 		return res.status(400).json({ success: false, message: 'Email is required' });
 	}
 
-	const normalised = email.toLowerCase().trim();
+	const GENERIC = { success: true, message: 'If an account with that email exists, we sent a reset link.' };
 
 	try {
-		const user = await BaseUser.findOne({ email: normalised }).select('_id name email password role');
+		const user = await BaseUser.findOne({ email: String(email).toLowerCase().trim() }).select('_id email');
+		if (!user) return res.status(200).json(GENERIC);
 
-		
-		
-		if (!user) {
-			return res.status(200).json({
-				success: true,
-				message: 'If an account with that email exists, a reset token has been issued',
-			});
-		}
+		const { token, hash, expiresAt } = createResetToken();
+		await BaseUser.updateOne(
+			{ _id: user._id },
+			{ $set: { passwordResetTokenHash: hash, passwordResetExpires: expiresAt } }
+		);
 
-		
-		
-		
-		
-		const resetToken = generateResetToken(user);
+		const base = process.env.APP_BASE_URL || 'http://localhost:3000';
+		await mailer.sendPasswordReset(user.email, `${base}/reset?token=${encodeURIComponent(token)}`);
 
-		return res.status(200).json({
-			success: true,
-			message: 'If an account with that email exists, a reset token has been issued',
-			
-			resetToken,
-		});
-
+		return res.status(200).json(GENERIC);
 	} catch (err) {
 		console.error('forgot_password error:', err);
 		return res.status(500).json({ success: false, message: 'Something went wrong, please try again' });
@@ -481,75 +352,143 @@ async function forgot_password(req, res) {
 }
 
 
-
-
-
 async function reset_password(req, res) {
-	const { resetToken, newPassword } = req.body;
+	const { token, newPassword } = req.body || {};
 
-	if (!resetToken || !newPassword) {
-		return res.status(400).json({ success: false, message: 'resetToken and newPassword are required' });
-	}
-
-	
-	const pwError = validatePassword(newPassword);
-	if (pwError) {
-		return res.status(400).json({ success: false, message: pwError });
+	if (!token || !newPassword) {
+		return res.status(400).json({ success: false, message: 'token and newPassword are required' });
 	}
 
 	try {
-		
-		let decoded;
-		try {
-			decoded = verifyResetToken(resetToken);
-		} catch {
-			return res.status(400).json({
-				success: false,
-				message: 'Reset token is invalid or has expired',
-			});
-		}
+		const user = await BaseUser.findOne({
+			passwordResetTokenHash: hashResetToken(token),
+			passwordResetExpires:   { $gt: new Date() },
+		}).select('_id email password authProviders');
 
-		const { _id, pwHash } = decoded;
-
-		
-		const user = await BaseUser.findById(_id).select('_id password');
 		if (!user) {
-			return res.status(404).json({ success: false, message: 'Account not found' });
+			return res.status(400).json({ success: false, message: 'This reset link is invalid or has expired' });
 		}
 
-		
-		
-		
-		
-		if (user.password !== pwHash) {
-			return res.status(400).json({
-				success: false,
-				message: 'Reset token has already been used',
-			});
+		const pwError = validatePassword(newPassword, { email: user.email });
+		if (pwError) {
+			return res.status(400).json({ success: false, message: pwError });
 		}
 
-		
-		const isSame = await comparePasswords(newPassword, user.password);
-		if (isSame) {
-			return res.status(400).json({
-				success: false,
-				message: 'New password must be different from the current password',
-			});
-		}
+		// Single use: clearing the hash makes the same link fail next time.
+		// Clearing refreshToken signs out every other session.
+		await BaseUser.updateOne(
+			{ _id: user._id },
+			{
+				$set:      { password: await hashPassword(newPassword) },
+				$unset:    { passwordResetTokenHash: '', passwordResetExpires: '', refreshToken: '' },
+				$addToSet: { authProviders: 'password' },
+			}
+		);
 
-		
-		const hashed = await hashPassword(newPassword);
-		user.password     = hashed;
-		user.refreshToken = undefined; 
-		await user.save();
-
-		return res.status(200).json({
-			success: true,
-			message: 'Password reset successfully. Please log in with your new password.',
-		});
-
+		return res.status(200).json({ success: true, message: 'Password reset. Please log in with your new password.' });
 	} catch (err) {
 		console.error('reset_password error:', err);
+		return res.status(500).json({ success: false, message: 'Something went wrong, please try again' });
+	}
+}
+
+
+// Signed-in password change. The current password is required whenever one exists;
+// Google-only accounts can set a first password without one.
+async function change_password(req, res) {
+	const { currentPassword, newPassword } = req.body || {};
+
+	try {
+		const user = await BaseUser.findById(req.user._id).select('_id email password role');
+		if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+		if (user.password) {
+			const ok = await comparePasswords(String(currentPassword || ''), user.password);
+			if (!ok) return res.status(401).json({ success: false, message: 'Current password is incorrect' });
+			if (await comparePasswords(String(newPassword || ''), user.password)) {
+				return res.status(400).json({ success: false, message: 'New password must be different from the current one' });
+			}
+		}
+
+		const pwError = validatePassword(newPassword, { email: user.email });
+		if (pwError) return res.status(400).json({ success: false, message: pwError });
+
+		await BaseUser.updateOne(
+			{ _id: user._id },
+			{ $set: { password: await hashPassword(newPassword) }, $addToSet: { authProviders: 'password' } }
+		);
+
+		// Rotate the session so other devices are signed out but this one stays in.
+		await startSession(res, user);
+
+		return res.status(200).json({ success: true, message: 'Password updated' });
+	} catch (err) {
+		console.error('change_password error:', err);
+		return res.status(500).json({ success: false, message: 'Something went wrong, please try again' });
+	}
+}
+
+
+// Continue with Google. Existing accounts (by googleId, then by verified email) sign in;
+// a new person must also send a role and accept the terms, otherwise 409 ROLE_REQUIRED.
+async function google_auth(req, res) {
+	const { credential, role, accepted_terms } = req.body || {};
+	if (!credential) return res.status(400).json({ success: false, message: 'credential is required' });
+
+	let profile;
+	try {
+		profile = await google.verify(credential);
+	} catch (err) {
+		if (err.status === 503) return res.status(503).json({ success: false, message: err.message });
+		return res.status(401).json({ success: false, message: 'Google sign-in failed' });
+	}
+
+	if (!profile.emailVerified || !profile.email) {
+		return res.status(401).json({ success: false, message: 'Your Google email is not verified' });
+	}
+
+	const email = profile.email.toLowerCase().trim();
+
+	try {
+		let user = await BaseUser.findOne({ googleId: profile.googleId });
+		let isNew = false;
+
+		if (!user) {
+			user = await BaseUser.findOne({ email });
+			if (user) {
+				// Same verified email: link Google to the existing account.
+				await BaseUser.updateOne(
+					{ _id: user._id },
+					{ $set: { googleId: profile.googleId }, $addToSet: { authProviders: 'google' } }
+				);
+			}
+		}
+
+		if (!user) {
+			const cleanRole = normalizeRole(role);
+			if (!cleanRole || !accepted_terms) {
+				return res.status(409).json({ success: false, code: 'ROLE_REQUIRED', name: profile.name || '', email });
+			}
+			const Model = cleanRole === 'founder' ? Founder : Investor;
+			user = await Model.create({
+				name:           (profile.name || email.split('@')[0]).slice(0, MAX_NAME),
+				email,
+				googleId:       profile.googleId,
+				avatar:         profile.picture || undefined,
+				plan:           'free',
+				accepted_terms: true,
+				authProviders:  ['google'],
+			});
+			isNew = true;
+		}
+
+		await startSession(res, user);
+		return res.status(isNew ? 201 : 200).json({ success: true, isNew, user: publicUser(user) });
+	} catch (err) {
+		if (err && err.code === 11000) {
+			return res.status(409).json({ success: false, message: 'An account with this email already exists' });
+		}
+		console.error('google_auth error:', err);
 		return res.status(500).json({ success: false, message: 'Something went wrong, please try again' });
 	}
 }

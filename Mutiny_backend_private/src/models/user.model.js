@@ -18,11 +18,20 @@ const BaseUserSchema = new mongoose.Schema({
 		lowercase: true
 	},
 
+	// Not required for accounts created with Continue with Google.
 	password: {
 		type: String,
-		required: true
+		required: function () { return !this.googleId; }
 	},
 
+	googleId:      { type: String, unique: true, sparse: true },
+	authProviders: [{ type: String, enum: ['password', 'google'] }],
+
+	// Password reset: only the sha256 of the emailed token is stored (see utils/resetToken.util.js).
+	passwordResetTokenHash: { type: String, select: false },
+	passwordResetExpires:   { type: Date,   select: false },
+
+	// Set only by the server. Everything is free for now; signup never reads this from the body.
 	plan: {
 		type: String,
 		enum: ['free', 'something', 'something_pro', 'nothing', 'nothing_pro'],
