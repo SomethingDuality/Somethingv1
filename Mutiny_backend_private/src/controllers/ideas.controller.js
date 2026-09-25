@@ -1,9 +1,10 @@
 const mongoose = require('mongoose');
 const { Idea }    = require('../models/ideas.model.js');
-const { Like }    = require('../models/likes.model.js');
 const { Founder, BaseUser } = require('../models/user.model.js');
-const client = require('../config/redis.js');
 const { pushNotification } = require('../services/notifications.service.js');
+const cache = require('../utils/cache.js');
+const { addLike, removeLike } = require('../services/likes.service.js');
+const { respondLikeError } = require('./feed.controller.js');
 const {
     publishIdeaCreated,
     publishIdeaUpdated,
@@ -24,13 +25,9 @@ const fetch_user_ideas = async (req, res) => {
     const key = `user_ideas:${user_id}`;
 
     try {
-        try {
-            const cached = await client.get(key);
-            if (cached) {
-                return res.status(200).json(JSON.parse(cached));
-            }
-        } catch (err) {
-            console.error('Redis cache fetch error:', err);
+        const cached = await cache.getJSON(key);
+        if (cached) {
+            return res.status(200).json(cached);
         }
 
         const founder = await requireFounder(user_id);
@@ -42,9 +39,7 @@ const fetch_user_ideas = async (req, res) => {
             .sort({ createdAt: -1 })
             .lean();
 
-        client.setEx(key, 3600, JSON.stringify(ideas)).catch(err => {
-            console.error('Redis setEx error:', err);
-        });
+        await cache.setJSON(key, ideas, 3600);
 
         return res.status(200).json(ideas);
 
@@ -145,6 +140,7 @@ const create_idea = async (req, res) => {
 		});
 
 		await idea.save();
+		await cache.del(`user_ideas:${user_id}`);
 
 		publishIdeaCreated({
 			ideaId:    idea._id.toString(),
@@ -198,6 +194,7 @@ const update_idea = async (req, res) => {
 		if (attachments !== undefined) idea.attachments = Array.isArray(attachments) ? attachments : [];
 
 		await idea.save();
+		await cache.del(`user_ideas:${user_id}`);
 
 		publishIdeaUpdated({
 			ideaId:  id,
@@ -250,76 +247,20 @@ const delete_idea = async (req, res) => {
 
 
 const like_idea = async (req, res) => {
-	const user_id = req.user._id;
-	const { id }  = req.params;
-
-	if (!mongoose.Types.ObjectId.isValid(id)) {
-		return res.status(400).json({ success: false, message: 'Invalid idea ID' });
-	}
-
 	try {
-		const idea = await Idea.findById(id).select('_id likes').lean();
-		if (!idea) {
-			return res.status(404).json({ success: false, message: 'Idea not found' });
-		}
-
-		
-		const result = await Like.updateOne(
-			{ postID: id, userId: user_id },
-			{ $setOnInsert: { postID: id, userId: user_id } },
-			{ upsert: true }
-		);
-
-		if (result.upsertedCount === 0) {
-			
-			const current = await Idea.findById(id).select('likes').lean();
-			return res.status(200).json({ success: true, likes: current.likes, alreadyLiked: true });
-		}
-
-		
-		const updated = await Idea.findByIdAndUpdate(
-			id,
-			{ $inc: { likes: 1 } },
-			{ new: true }
-		).select('likes').lean();
-
-		return res.status(200).json({ success: true, likes: updated.likes, alreadyLiked: false });
+		const result = await addLike(req.params.id, req.user._id);
+		return res.status(200).json({ success: true, ...result });
 	} catch (err) {
-		console.error('like_idea:', err);
-		return res.status(500).json({ success: false, message: 'Internal server error' });
+		return respondLikeError(res, err, 'like_idea');
 	}
 };
 
 const unlike_idea = async (req, res) => {
-	const user_id = req.user._id;
-	const { id }  = req.params;
-
-	if (!mongoose.Types.ObjectId.isValid(id)) {
-		return res.status(400).json({ success: false, message: 'Invalid idea ID' });
-	}
-
 	try {
-		const deleted = await Like.deleteOne({ postID: id, userId: user_id });
-
-		if (deleted.deletedCount === 0) {
-			return res.status(200).json({ success: true, message: 'Not liked', alreadyUnliked: true });
-		}
-
-		
-		const updated = await Idea.findByIdAndUpdate(
-			id,
-			{ $inc: { likes: -1 } },
-			{ new: true }
-		).select('likes').lean();
-
-		if (!updated) {
-			return res.status(404).json({ success: false, message: 'Idea not found' });
-		}
-
-		return res.status(200).json({ success: true, likes: Math.max(0, updated.likes) });
+		const result = await removeLike(req.params.id, req.user._id);
+		return res.status(200).json({ success: true, ...result });
 	} catch (err) {
-		console.error('unlike_idea:', err);
-		return res.status(500).json({ success: false, message: 'Internal server error' });
+		return respondLikeError(res, err, 'unlike_idea');
 	}
 };
 
