@@ -2,8 +2,8 @@ const mongoose = require('mongoose');
 const { Idea }    = require('../models/ideas.model.js');
 const { Like }    = require('../models/likes.model.js');
 const { Founder, BaseUser } = require('../models/user.model.js');
-const { pushNotification } = require('./notifications.controller.js');
 const client = require('../config/redis.js');
+const { pushNotification } = require('../services/notifications.service.js');
 const {
     publishIdeaCreated,
     publishIdeaUpdated,
@@ -458,7 +458,8 @@ const request_collaboration = async (req, res) => {
 		const email = requester.email || 'no-email@example.com';
 		const notificationText = `User ${name} (${email}) asked to collaborate`;
 
-		await pushNotification(ownerId, notificationText);
+		// One notification per requester per idea: repeated clicks can't spam the owner.
+		await pushNotification(ownerId, notificationText, { key: `collab:${id}:${user_id}` });
 
 		return res.status(200).json({ success: true, message: 'Collaboration request sent successfully' });
 	} catch (err) {

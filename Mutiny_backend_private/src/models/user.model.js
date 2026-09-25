@@ -50,6 +50,7 @@ const BaseUserSchema = new mongoose.Schema({
 		timestamp: { type: Date,   default: Date.now },
 		// Idempotency key: the same event replayed never creates a second notification.
 		key:       { type: String },
+		read:      { type: Boolean, default: false }
 	}],
 
 	

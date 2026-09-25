@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 const { Portfolio } = require('../models/portfolio.model.js');
 const { Investor }  = require('../models/user.model.js');
 const { Idea }      = require('../models/ideas.model.js');
-const { pushNotification } = require('./notifications.controller.js');
+const { pushNotification } = require('../services/notifications.service.js');
 const { incrementTrust }   = require('../utils/trust.util.js');
 const {
     publishInvestmentCommitted,

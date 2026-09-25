@@ -2,8 +2,7 @@ const mongoose = require('mongoose');
 const { Team }    = require('../models/team.model.js');
 const { Idea }    = require('../models/ideas.model.js');
 const { BaseUser, Founder } = require('../models/user.model.js');
-const { pushNotification } = require('./notifications.controller.js');
-const client = require('../config/redis.js');
+const { pushNotification } = require('../services/notifications.service.js');
 
 
 
@@ -281,7 +280,7 @@ const add_member = async(req, res)=>{
 
 		await pushNotification(
 			user_id,
-			`You were added to the team "${doc.name}" as ${role.trim()}`
+			`You were added to the team “${doc.name}” as ${role.trim()}`
 		);
 
 		return res.status(200).json({
