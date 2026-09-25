@@ -3,8 +3,26 @@ const { Idea }    = require('../models/ideas.model.js');
 const { Founder, BaseUser } = require('../models/user.model.js');
 const { pushNotification } = require('../services/notifications.service.js');
 const cache = require('../utils/cache.js');
+const tax = require('../shared/taxonomy.js');
 const { addLike, removeLike } = require('../services/likes.service.js');
 const { respondLikeError } = require('./feed.controller.js');
+const { FIELDS, FieldError, sourceKey, isAnswered } = require('../profile/fields.js');
+
+// Validates/normalizes idea fields through the shared registry (tags → sector ids, roles → role ids)
+// and records where each value came from, like profile/applyUpdate.js does for users.
+const IDEA_KEYS = ['title', 'description', 'stage', 'tags', 'lookingFor', 'raising', 'isDraft'];
+const cleanIdeaFields = (body, source) => {
+	const values = {};
+	const sources = {};
+	const at = new Date();
+	for (const k of IDEA_KEYS) {
+		if (body[k] === undefined) continue;
+		values[k] = FIELDS.idea[k].set(body[k], k);
+		// null = clear the source; only a real value counts as an answer.
+		if (k !== 'isDraft') sources[sourceKey(k)] = isAnswered(values[k]) ? { source, at } : null;
+	}
+	return { values, sources };
+};
 const {
     publishIdeaCreated,
     publishIdeaUpdated,
@@ -50,13 +68,34 @@ const fetch_user_ideas = async (req, res) => {
 };
 
 
+// A founder's free-text location ("Pune, India", "Koramangala, Bangalore") as a known
+// locations id when one appears in it, else "other". Clean values for filters and matching (P17).
+const locationIdOf = (text) => {
+	const s = String(text || '').trim();
+	if (!s) return null;
+	for (const part of [s, ...s.split(/[,/|·]+/)]) {
+		const id = tax.normalize('locations', part);
+		if (id && tax.isKnown('locations', id)) return id;
+	}
+	return 'other';
+};
+
 const fetch_discover_ideas = async (req, res) => {
 	try {
 		const ideas = await Idea.find({ isDraft: false })
 			.sort({ createdAt: -1 })
 			.lean();
 
-		return res.status(200).json(ideas);
+		// Each idea carries its founder's location (from the founder profile).
+		const founders = await Founder.find({ _id: { $in: [...new Set(ideas.map((i) => String(i.founder_id)))] } })
+			.select('location avatar').lean();
+		const byId = new Map(founders.map((f) => [String(f._id), f]));
+
+		return res.status(200).json(ideas.map((i) => {
+			const f = byId.get(String(i.founder_id));
+			const location = f?.location || '';
+			return { ...i, founderLocation: location, locationId: locationIdOf(location), founderAvatar: f?.avatar || '' };
+		}));
 	} catch (err) {
 		console.error('fetch_discover_ideas:', err);
 		return res.status(500).json({ success: false, message: 'Internal server error' });
@@ -72,12 +111,15 @@ const fetch_idea_by_id = async (req, res) => {
 
 	try {
 		const idea = await Idea.findById(id).lean();
-		if (!idea) {
+		// A draft is visible only to its founder; everyone else gets the same 404 as a missing idea.
+		const isOwner = req.user && String(idea?.founder_id) === String(req.user._id);
+		if (!idea || (idea.isDraft && !isOwner)) {
 			return res.status(404).json({ success: false, message: 'Idea not found' });
 		}
 
+		// Fire-and-forget, but never let a failed counter write become an unhandled rejection.
+		Idea.updateOne({ _id: id }, { $inc: { views: 1 } }).exec().catch(() => {});
 
-		Idea.findByIdAndUpdate(id, { $inc: { views: 1 } }).exec();
 
 		return res.status(200).json(idea);
 	} catch (err) {
@@ -94,15 +136,25 @@ const create_idea = async (req, res) => {
 		tags,
 		stage,
 		lookingFor,
+		raising,
 		isDraft,
 		attachments
 	} = req.body;
 
-	if (!title || !description || !stage) {
+	// Only a title and a description are required; the Something box asks for the rest later.
+	if (!title || !description) {
 		return res.status(400).json({
 			success: false,
-			message: 'title, description and stage are required'
+			message: 'title and description are required'
 		});
+	}
+
+	let cleaned;
+	try {
+		cleaned = cleanIdeaFields({ title, description, stage, tags, lookingFor, raising, isDraft }, 'profile');
+	} catch (err) {
+		if (err instanceof FieldError) return res.status(422).json({ success: false, field: err.path, message: err.message });
+		throw err;
 	}
 
 	try {
@@ -126,17 +178,20 @@ const create_idea = async (req, res) => {
 			});
 		}
 
+		const v = cleaned.values;
 		const idea = new Idea({
-			founder_id:  user_id,
-			author:      founder.name,
-			title:       title.trim(),
-			description,
-			desc:        makeExcerpt(description),
-			tags:        Array.isArray(tags) ? tags : [],
-			stage,
-			lookingFor:  Array.isArray(lookingFor) ? lookingFor : [],
-			isDraft:     Boolean(isDraft),
-			attachments: Array.isArray(attachments) ? attachments : []
+			founder_id:   user_id,
+			author:       founder.name,
+			title:        v.title,
+			description:  v.description,
+			desc:         makeExcerpt(v.description),
+			tags:         v.tags ?? [],
+			stage:        v.stage || undefined,
+			lookingFor:   v.lookingFor ?? [],
+			raising:      v.raising || '',
+			isDraft:      Boolean(v.isDraft),
+			attachments:  Array.isArray(attachments) ? attachments : [],
+			fieldSources: Object.fromEntries(Object.entries(cleaned.sources).filter(([, v]) => v)),
 		});
 
 		await idea.save();
@@ -167,6 +222,7 @@ const update_idea = async (req, res) => {
 		tags,
 		stage,
 		lookingFor,
+		raising,
 		isDraft,
 		attachments
 	} = req.body;
@@ -185,12 +241,16 @@ const update_idea = async (req, res) => {
 			return res.status(403).json({ success: false, message: 'Not authorized to edit this idea' });
 		}
 
-		if (title)       idea.title       = title.trim();
-		if (description) { idea.description = description; idea.desc = makeExcerpt(description); }
-		if (stage)       idea.stage       = stage;
-		if (tags        !== undefined) idea.tags        = Array.isArray(tags)        ? tags        : [];
-		if (lookingFor  !== undefined) idea.lookingFor  = Array.isArray(lookingFor)  ? lookingFor  : [];
-		if (isDraft     !== undefined) idea.isDraft     = Boolean(isDraft);
+		let cleaned;
+		try {
+			cleaned = cleanIdeaFields({ title, description, stage, tags, lookingFor, raising, isDraft }, 'profile');
+		} catch (err) {
+			if (err instanceof FieldError) return res.status(422).json({ success: false, field: err.path, message: err.message });
+			throw err;
+		}
+		for (const [k, v] of Object.entries(cleaned.values)) idea[k] = v;
+		if (cleaned.values.description !== undefined) idea.desc = makeExcerpt(cleaned.values.description);
+		for (const [k, v] of Object.entries(cleaned.sources)) idea.set(`fieldSources.${k}`, v ?? undefined);
 		if (attachments !== undefined) idea.attachments = Array.isArray(attachments) ? attachments : [];
 
 		await idea.save();
@@ -204,6 +264,7 @@ const update_idea = async (req, res) => {
 				...(stage       !== undefined && { stage:       idea.stage }),
 				...(tags        !== undefined && { tags:        idea.tags }),
 				...(lookingFor  !== undefined && { lookingFor:  idea.lookingFor }),
+				...(raising     !== undefined && { raising:     idea.raising }),
 				...(isDraft     !== undefined && { isDraft:     idea.isDraft }),
 				...(attachments !== undefined && { attachments: true }),
 			},

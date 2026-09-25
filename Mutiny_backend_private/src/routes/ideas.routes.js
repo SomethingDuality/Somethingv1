@@ -25,7 +25,7 @@ const {
 	delete_comment
 } = require('../controllers/comments.controller.js');
 
-const { protect } = require('../middleware/auth.middleware.js');
+const { protect, optionalAuth } = require('../middleware/auth.middleware.js');
 
 
 
@@ -74,7 +74,7 @@ router.get('/user',      protect, fetch_user_ideas);
 router.post('/',         protect, create_idea);
 
 
-router.get('/:id',                    fetch_idea_by_id);
+router.get('/:id',                    optionalAuth, fetch_idea_by_id);
 router.put('/:id',                    protect, update_idea);
 router.delete('/:id',                 protect, delete_idea);
 router.post('/:id/like',              protect, like_idea);
