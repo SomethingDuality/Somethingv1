@@ -1,167 +1,126 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useCallback, useEffect, useState } from "react"
 import apiClient from "@/lib/axios"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-import { Button } from "@/components/ui/button"
-import { Bell, Check, Loader2 } from "lucide-react"
-import { Badge } from "./ui/badge"
-import { cn } from "@/lib/utils"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { apiError, cn } from "@/lib/utils"
+import { when } from "@/lib/format"
 
 interface Notification {
   id: string
   text: string
-  read: boolean
   timestamp: string
+  read: boolean
 }
 
-const DEFAULT_NOTIFICATIONS: Notification[] = []
 
-// Stored Database Helpers
-function getStoredNotifications(): Notification[] {
-  if (typeof window === "undefined") return []
-  const saved = localStorage.getItem("founder_notifications")
-  return saved ? JSON.parse(saved) : []
-}
-
-function setStoredNotifications(notifications: Notification[]) {
-  if (typeof window !== "undefined") {
-    localStorage.setItem("founder_notifications", JSON.stringify(notifications))
-  }
-}
-
-const notificationsAPI = {
-  async getNotifications(): Promise<Notification[]> {
-    try {
-      const response = await apiClient.get<Notification[]>("/notifications")
-      return response.data
-    } catch (error) {
-      console.warn("Error fetching notifications, using local store:", error)
-      return getStoredNotifications()
-    }
-  },
-
-  async markAllAsRead(): Promise<void> {
-    try {
-      await apiClient.post("/notifications/mark-all-read", {})
-    } catch (error) {
-      console.warn("Error marking notifications as read on server, updating locally:", error)
-      const data = getStoredNotifications()
-      const updated = data.map((n) => ({ ...n, read: true }))
-      setStoredNotifications(updated)
-    }
-  },
-}
-
+/**
+ * The sidebar's "Notifications" row and its list. Server data only: if the request fails the
+ * list says so (it used to fall back to a browser copy and look current).
+ * Unread ones are counted on the row and shown in full colour; opening one marks it read.
+ * "Clear all" deletes them.
+ */
 export function NotificationsDropdown() {
-  const [notifications, setNotifications] = useState<Notification[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [isOpen, setIsOpen] = useState(false)
+  const [items, setItems] = useState<Notification[]>([])
+  const [error, setError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
 
-  const fetchNotifications = async () => {
-    setIsLoading(true)
-    const data = await notificationsAPI.getNotifications()
-    setNotifications(data)
-    setIsLoading(false)
-  }
-
-  useEffect(() => {
-    fetchNotifications()
+  const load = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await apiClient.get<Notification[]>("/notifications")
+      setItems(res.data)
+    } catch (err) {
+      setError(apiError(err, "Couldn't load notifications."))
+    } finally {
+      setLoading(false)
+    }
   }, [])
 
   useEffect(() => {
-    if (isOpen) {
-      fetchNotifications()
-    }
-  }, [isOpen])
+    load()
+  }, [load])
 
-  const handleMarkAllAsRead = async () => {
+  const unread = items.filter((n) => !n.read).length
+
+  const markRead = async (id: string) => {
+    setItems((list) => list.map((n) => (n.id === id ? { ...n, read: true } : n)))
     try {
-      await notificationsAPI.markAllAsRead()
-      const updated = notifications.map((n) => ({ ...n, read: true }))
-      setNotifications(updated)
-      setStoredNotifications(updated)
-    } catch (error) {
-      console.error(error)
+      await apiClient.post(`/notifications/mark-read/${id}`, {})
+    } catch {
+      // Not worth interrupting for: it shows as unread again on the next load.
     }
   }
 
-  const unreadCount = notifications.filter((n) => !n.read).length
+  const markAllRead = async () => {
+    try {
+      await apiClient.post("/notifications/mark-all-read", {})
+      setItems((list) => list.map((n) => ({ ...n, read: true })))
+    } catch (err) {
+      setError(apiError(err, "Couldn't mark notifications read."))
+    }
+  }
+
+  const clearAll = async () => {
+    try {
+      await apiClient.delete("/notifications")
+      setItems([])
+    } catch (err) {
+      setError(apiError(err, "Couldn't clear notifications."))
+    }
+  }
 
   return (
-    <DropdownMenu onOpenChange={setIsOpen}>
-      <DropdownMenuTrigger asChild>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="relative border border-border/40 text-foreground/60 hover:bg-accent hover:text-foreground rounded-full bg-transparent transition-all h-8 w-8"
-        >
-          <Bell className="h-4 w-4" />
-          {unreadCount > 0 && (
-            <Badge
-              className="absolute -top-1 -right-1 flex h-4 min-w-[16px] px-1 items-center justify-center rounded-full bg-[#34D399] text-black text-[11px] font-bold shadow-[0_0_8px_rgba(52,211,153,0.5)] border-0"
-            >
-              {unreadCount}
-            </Badge>
-          )}
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-80 bg-popover border border-border text-popover-foreground backdrop-blur-xl rounded-2xl shadow-2xl p-2">
-        <DropdownMenuLabel className="font-semibold text-[10px] text-muted-foreground px-3 py-2 uppercase tracking-wider font-mono">
-          Inbox Alerts
-        </DropdownMenuLabel>
-        <DropdownMenuSeparator className="bg-border mx-2" />
-        <div className="max-h-72 overflow-y-auto my-1" style={{ scrollbarWidth: "thin" }}>
-          {isLoading ? (
-            <div className="flex items-center justify-center p-6">
-              <Loader2 className="h-5 w-5 animate-spin text-[var(--brand-accent)]" />
+    <Popover onOpenChange={(open) => open && load()}>
+      <PopoverTrigger className="flex w-full items-center justify-between py-1.5 text-[15px] text-muted-foreground hover:text-foreground transition-colors cursor-pointer">
+        <span>Notifications</span>
+        {unread > 0 && <span className="text-foreground tabular-nums" aria-label={`${unread} unread`}>{unread}</span>}
+      </PopoverTrigger>
+      <PopoverContent side="right" align="end" sideOffset={16} className="w-80 p-0 bg-popover border-border rounded-xl">
+        <div className="max-h-96 overflow-y-auto p-2">
+          {loading && items.length === 0 ? (
+            <p className="px-3 py-6 text-sm text-muted-foreground">Loading…</p>
+          ) : error ? (
+            <div className="px-3 py-4 space-y-2">
+              <p className="text-sm text-destructive">{error}</p>
+              <button type="button" onClick={load} className="text-sm underline underline-offset-4 cursor-pointer">Retry</button>
             </div>
-          ) : notifications.length > 0 ? (
-            notifications.map((notification) => (
-              <DropdownMenuItem
-                key={notification.id}
-                className="flex items-start gap-3 p-3 focus:bg-accent rounded-xl cursor-pointer transition-colors focus:text-foreground"
-              >
-                <div
-                  className={cn(
-                    "mt-1.5 h-2 w-2 flex-shrink-0 rounded-full transition-all",
-                    notification.read
-                      ? "bg-transparent"
-                      : "shadow-[0_0_6px_var(--brand-accent)]"
-                  )}
-                  style={!notification.read ? { background: "var(--brand-accent)" } : undefined}
-                />
-                <div className="flex-1 space-y-1">
-                  <p className={cn(
-                    "text-xs leading-normal font-sans",
-                    notification.read ? "text-muted-foreground font-light" : "text-foreground font-medium"
-                  )}>
-                    {notification.text}
-                  </p>
-                  <span className="block text-[11px] font-mono text-muted-foreground/60">{notification.timestamp}</span>
-                </div>
-              </DropdownMenuItem>
-            ))
+          ) : items.length === 0 ? (
+            <p className="px-3 py-6 text-sm text-muted-foreground">You&apos;re all caught up.</p>
           ) : (
-            <p className="p-6 text-center text-xs text-muted-foreground font-mono">No alerts received.</p>
+            <ul>
+              {items.map((n) => (
+                <li key={n.id} className="border-b border-border last:border-0">
+                  <button
+                    type="button"
+                    onClick={() => !n.read && markRead(n.id)}
+                    className={cn("w-full px-3 py-3 text-left", n.read ? "cursor-default" : "cursor-pointer")}
+                  >
+                    <p className={cn("text-sm leading-snug", n.read ? "text-muted-foreground" : "text-foreground")}>{n.text}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {when(n.timestamp)}
+                      {!n.read && <span className="sr-only">, unread</span>}
+                    </p>
+                  </button>
+                </li>
+              ))}
+            </ul>
           )}
         </div>
-        <DropdownMenuSeparator className="bg-border mx-2" />
-        <DropdownMenuItem
-          onClick={handleMarkAllAsRead}
-          disabled={unreadCount === 0}
-          className="flex items-center justify-center gap-2 p-2.5 text-xs text-muted-foreground hover:text-foreground focus:bg-accent rounded-xl cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed transition-all font-semibold font-mono"
-        >
-          <Check className="h-3.5 w-3.5" /> Mark all as read
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+        {items.length > 0 && (
+          <div className="flex gap-5 border-t border-border px-5 py-3 text-sm">
+            {unread > 0 && (
+              <button type="button" onClick={markAllRead} className="text-muted-foreground hover:text-foreground cursor-pointer">
+                Mark all read
+              </button>
+            )}
+            <button type="button" onClick={clearAll} className="text-muted-foreground hover:text-foreground cursor-pointer">
+              Clear all
+            </button>
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
   )
 }
