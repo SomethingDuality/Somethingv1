@@ -134,6 +134,11 @@ const founderSchema = new mongoose.Schema({
 
 	
 	
+	// "Tell me when Something and Nothing can review my ideas" (set on the Something page).
+	reviewWaitlist: {
+		joinedAt: { type: Date, default: null },
+	},
+
 	owned_teams: [{
 		type: mongoose.Schema.Types.ObjectId,
 		ref:  'Team'
