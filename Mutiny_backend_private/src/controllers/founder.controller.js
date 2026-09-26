@@ -159,123 +159,118 @@ const update_avatar = async (req, res) => {
 };
 
 
+const ACTIVITY_LIMIT = 10;
+const quote = (s, n = 80) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
+const usd = (n) => `$${Number(n || 0).toLocaleString('en-US')}`;
+
+// The founder's home: counts, per-idea money, the team and recent activity, all from real rows.
+// Likes are shown without a name (Ghost Mode hides who looked or liked); comments are public and
+// money reveals identity, so those carry names.
 const get_overview = async (req, res) => {
 	if (!assertFounder(req, res)) return;
 
 	const founder_id = req.user._id;
+	const me = String(founder_id);
 
 	try {
-		
-		const [ideas, teams, user, portfolioData] = await Promise.all([
-			
-			Idea.find({ founder_id })
-				.sort({ createdAt: -1 })
-				.limit(3)
-				.select('title stage tags isDraft likes views')
-				.lean(),
+		const { Like }    = require('../models/likes.model.js');
+		const { Comment } = require('../models/comments.model.js');
+		const { BaseUser } = require('../models/user.model.js');
 
-			
-			Team.find({ founder_id })
-				.select('members investors')
-				.lean(),
-
-			
-			Founder.findById(founder_id)
-				.select('notifications')
-				.lean(),
-
-			
-			
-			Idea.find({ founder_id })
-				.select('_id')
-				.lean()
-				.then(async (allIdeas) => {
-					if (!allIdeas.length) return { raised: 0, goal: 0 };
-					const ideaIds = allIdeas.map(i => i._id);
-					const portfolios = await Portfolio.find({
-						'investments.idea_id': { $in: ideaIds }
-					}).lean();
-
-					let raised = 0;
-					let goal   = 0;
-
-					for (const p of portfolios) {
-						for (const inv of p.investments) {
-							if (ideaIds.some(id => id.toString() === inv.idea_id.toString())) {
-								raised += inv.amount_released  || 0;
-								goal   += inv.amount_committed || 0;
-							}
-						}
-					}
-					return { raised, goal };
-				})
+		const [ideas, teams, user] = await Promise.all([
+			Idea.find({ founder_id }).sort({ createdAt: -1 }).select('title stage tags isDraft likes views').lean(),
+			Team.find({ founder_id }).select('idea_id members').lean(),
+			Founder.findById(founder_id).select('notifications').lean(),
 		]);
+		const ideaIds = ideas.map((i) => i._id);
+		const titleOf = new Map(ideas.map((i) => [String(i._id), i.title]));
 
-		
-		const totalIdeas = await Idea.countDocuments({ founder_id });
+		const [portfolios, likes, comments] = ideaIds.length ? await Promise.all([
+			Portfolio.find({ 'investments.idea_id': { $in: ideaIds } }).select('investor_id investments').lean(),
+			Like.find({ postID: { $in: ideaIds }, userId: { $ne: founder_id } }).sort({ createdAt: -1 }).limit(ACTIVITY_LIMIT).select('postID createdAt').lean(),
+			Comment.find({ postID: { $in: ideaIds }, userId: { $ne: founder_id } }).sort({ createdAt: -1 }).limit(ACTIVITY_LIMIT)
+				.populate('userId', 'name').select('postID userId text createdAt').lean(),
+		]) : [[], [], []];
 
-		
-		const memberSet = new Set();
-		for (const team of teams) {
-			for (const m of team.members) {
-				memberSet.add(m.user_id.toString());
+		// Money per idea, and who committed (for names in the activity).
+		const perIdea = {};
+		const investorIds = new Set();
+		const moneyEvents = [];
+		for (const p of portfolios) {
+			for (const inv of p.investments) {
+				const id = String(inv.idea_id);
+				if (!titleOf.has(id)) continue;
+				perIdea[id] ??= { committed: 0, released: 0, investors: 0 };
+				perIdea[id].committed += inv.amount_committed || 0;
+				perIdea[id].released  += inv.amount_released  || 0;
+				perIdea[id].investors += 1;
+				investorIds.add(String(p.investor_id));
+				moneyEvents.push({ investor: String(p.investor_id), ideaId: id, inv });
+			}
+		}
+		const names = new Map((await BaseUser.find({ _id: { $in: [...investorIds] } }).select('name').lean())
+			.map((u) => [String(u._id), u.name || 'An investor']));
+
+		const totals = Object.values(perIdea).reduce(
+			(t, x) => ({ committed: t.committed + x.committed, released: t.released + x.released }),
+			{ committed: 0, released: 0 },
+		);
+
+		// Everyone on the founder's teams, once each; the founder is listed as "You".
+		const team = new Map();
+		for (const t of teams) {
+			for (const m of t.members) {
+				const id = String(m.user_id);
+				if (!team.has(id)) team.set(id, { id, name: m.name || 'Team member', initials: m.initials || '', role: m.role || '', isYou: id === me, joinedAt: m.lastActive || null, ideaId: String(t.idea_id) });
 			}
 		}
 
-		const fundsRaisedNum = portfolioData.raised;
-		const fundsRaisedStr = fundsRaisedNum > 0
-			? `$${fundsRaisedNum.toLocaleString()}`
-			: '$0';
+		const activity = [
+			...likes.map((l) => ({ kind: 'like', ideaId: String(l.postID), at: l.createdAt,
+				text: `Someone liked “${titleOf.get(String(l.postID))}”` })),
+			...comments.map((c) => ({ kind: 'comment', ideaId: String(c.postID), at: c.createdAt,
+				text: `${c.userId?.name || 'Someone'} commented on “${titleOf.get(String(c.postID))}”: ${quote(c.text)}` })),
+			...moneyEvents.flatMap(({ investor, ideaId, inv }) => [
+				{ kind: 'commit', ideaId, at: inv.committed_at,
+					text: `${names.get(investor)} committed ${usd(inv.amount_committed)} to “${titleOf.get(ideaId)}”` },
+				...(inv.releases || []).map((r) => ({ kind: 'release', ideaId, at: r.at,
+					text: `${names.get(investor)} recorded a ${usd(r.amount)} release for “${titleOf.get(ideaId)}”` })),
+			]),
+			...[...team.values()].filter((m) => !m.isYou && m.joinedAt).map((m) => ({ kind: 'team', ideaId: m.ideaId, at: m.joinedAt,
+				text: `${m.name} joined the team for “${titleOf.get(m.ideaId)}”${m.role ? ` as ${m.role}` : ''}` })),
+		]
+			.filter((a) => a.at)
+			.sort((a, b) => new Date(b.at) - new Date(a.at))
+			.slice(0, ACTIVITY_LIMIT)
+			.map((a, i) => ({ id: `${a.kind}-${a.ideaId}-${new Date(a.at).getTime()}-${i}`, ...a }));
 
-		
-		const ideasShaped = ideas.map(idea => {
-			let status = 'Seeking';
-			if (idea.isDraft) status = 'Draft';
-
-			
-			
-			const ideaGoal = portfolioData.goal; 
-
-			return {
-				id:         idea._id,
-				title:      idea.title,
-				status,
-				funding:    fundsRaisedNum > 0 ? `$${fundsRaisedNum.toLocaleString()}` : '$0',
-				stage:      idea.stage,
-				tags:       idea.tags || [],
-				fundedPct:  ideaGoal > 0 ? Math.round((fundsRaisedNum / ideaGoal) * 100) : 0
-			};
-		});
-
-		
-		const teamShaped = teams.flatMap(t =>
-			t.members.map(m => ({
-				id:         m.user_id,
-				initials:   m.initials   || '??',
-				name:       m.name       || 'Team Member',
-				role:       m.role       || 'Contributor',
-				lastActive: m.lastActive
-					? new Date(m.lastActive).toLocaleDateString()
-					: 'Unknown'
-			}))
-		);
+		const unread = (user?.notifications || []).filter((n) => !n.read).length;
 
 		return res.status(200).json({
 			kpis: {
-				ideas:       totalIdeas,
-				teamMembers: memberSet.size,
-				fundsRaised: fundsRaisedStr,
-				unreadChats: user?.notifications?.length || 0
+				ideas:       ideas.length,
+				teamMembers: [...team.values()].filter((m) => !m.isYou).length,
+				fundsRaised: usd(totals.released),
+				needsYou:    unread,
+				unreadChats: unread, // old name; it was always the notification count
 			},
-			ideas:    ideasShaped,
-			team:     teamShaped,
-			activity: [],   
-			escrow: {
-				raised: portfolioData.raised,
-				goal:   portfolioData.goal
-			}
+			totals: { ...totals, investors: investorIds.size },
+			ideas: ideas.slice(0, 5).map((idea) => ({
+				id:        idea._id,
+				title:     idea.title,
+				status:    idea.isDraft ? 'Draft' : 'Seeking',
+				stage:     idea.stage,
+				tags:      idea.tags || [],
+				likes:     idea.likes || 0,
+				views:     idea.views || 0,
+				committed: perIdea[String(idea._id)]?.committed || 0,
+				released:  perIdea[String(idea._id)]?.released  || 0,
+			})),
+			committedByIdea: Object.fromEntries(Object.entries(perIdea).map(([id, x]) => [id, x.committed])),
+			team: [...team.values()],
+			activity,
+			escrow: { raised: totals.released, goal: totals.committed },
 		});
-
 	} catch (err) {
 		console.error('get_overview:', err);
 		return res.status(500).json({ success: false, message: 'Internal server error' });

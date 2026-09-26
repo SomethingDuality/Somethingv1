@@ -164,7 +164,75 @@ const update_avatar = async (req, res) => {
 	}
 };
 
+const WATCHLIST_MAX = 500;
+
+// The saved ideas, newest saved last (the order they were saved in). Drafts and deleted ideas
+// drop out on read.
+const get_watchlist = async (req, res) => {
+	if (!assertInvestor(req, res)) return;
+	try {
+		const { Idea } = require('../models/ideas.model.js');
+		const doc = await Investor.findById(req.user._id).select('watchlist').lean();
+		const ids = doc?.watchlist || [];
+		const ideas = await Idea.find({ _id: { $in: ids }, isDraft: false })
+			.select('title author stage tags createdAt likes').lean();
+		const byId = new Map(ideas.map((i) => [String(i._id), i]));
+		return res.status(200).json({
+			ids: ids.map(String).filter((id) => byId.has(id)),
+			ideas: ids.map((id) => byId.get(String(id))).filter(Boolean),
+		});
+	} catch (err) {
+		console.error('get_watchlist:', err);
+		return res.status(500).json({ success: false, message: 'Internal server error' });
+	}
+};
+
+const save_idea = async (req, res) => {
+	if (!assertInvestor(req, res)) return;
+	const { ideaId } = req.params;
+	const mongoose = require('mongoose');
+	if (!mongoose.Types.ObjectId.isValid(ideaId)) {
+		return res.status(400).json({ success: false, message: 'Invalid idea ID' });
+	}
+	try {
+		const { Idea } = require('../models/ideas.model.js');
+		const idea = await Idea.findOne({ _id: ideaId, isDraft: false }).select('_id').lean();
+		if (!idea) return res.status(404).json({ success: false, message: 'Idea not found' });
+		// The size check and the add are one write, so parallel saves can't pass the cap.
+		const r = await Investor.updateOne(
+			{ _id: req.user._id, [`watchlist.${WATCHLIST_MAX - 1}`]: { $exists: false } },
+			{ $addToSet: { watchlist: idea._id } },
+		);
+		if (r.matchedCount === 0) {
+			return res.status(409).json({ success: false, message: `You can save up to ${WATCHLIST_MAX} ideas` });
+		}
+		return res.status(200).json({ success: true });
+	} catch (err) {
+		console.error('save_idea:', err);
+		return res.status(500).json({ success: false, message: 'Internal server error' });
+	}
+};
+
+const unsave_idea = async (req, res) => {
+	if (!assertInvestor(req, res)) return;
+	const { ideaId } = req.params;
+	const mongoose = require('mongoose');
+	if (!mongoose.Types.ObjectId.isValid(ideaId)) {
+		return res.status(400).json({ success: false, message: 'Invalid idea ID' });
+	}
+	try {
+		await Investor.updateOne({ _id: req.user._id }, { $pull: { watchlist: new mongoose.Types.ObjectId(ideaId) } });
+		return res.status(200).json({ success: true });
+	} catch (err) {
+		console.error('unsave_idea:', err);
+		return res.status(500).json({ success: false, message: 'Internal server error' });
+	}
+};
+
 module.exports = {
+	get_watchlist,
+	save_idea,
+	unsave_idea,
 	get_profile,
 	update_profile,
 	update_preferences,

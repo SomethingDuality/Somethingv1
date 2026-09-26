@@ -175,6 +175,8 @@ const investorSchema = new mongoose.Schema({
 
 	stageFocus: [{ type: String }],
 	publicProfile: { type: Boolean, default: true },
+	// Ideas the investor saved ("Save" in Discover); the first stage of their pipeline.
+	watchlist: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Idea' }],
 	handle: { type: String, default: '' },
 
 	

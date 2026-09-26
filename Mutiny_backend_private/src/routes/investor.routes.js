@@ -9,7 +9,10 @@ const {
 	update_preferences,
 	update_interests,
 	update_visibility,
-	update_avatar
+	update_avatar,
+	get_watchlist,
+	save_idea,
+	unsave_idea,
 } = require('../controllers/investor.controller.js');
 
 const {
@@ -42,6 +45,9 @@ router.put('/profile',            update_profile);
 router.put('/preferences',        update_preferences);
 router.put('/interests',          update_interests);
 router.put('/visibility',         update_visibility);
+router.get('/watchlist',                 get_watchlist);
+router.post('/watchlist/:ideaId',        save_idea);
+router.delete('/watchlist/:ideaId',      unsave_idea);
 router.post('/avatar',            upload.single('avatar'), update_avatar);
 
 

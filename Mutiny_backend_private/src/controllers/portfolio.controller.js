@@ -142,9 +142,25 @@ const get_portfolio = async (req, res) => {
 			});
 		}
 
+		// The founder behind each idea, as the same public card the idea page shows.
+		const { Founder } = require('../models/user.model.js');
+		const founderIds = portfolio.investments.map((inv) => inv.idea_id?.founder_id).filter(Boolean);
+		const founders = new Map((await Founder.find({ _id: { $in: founderIds } })
+			.select('name headline location avatar socials linkedin github').lean())
+			.map((f) => [String(f._id), {
+				id: f._id, name: f.name || '', headline: f.headline || '', location: f.location || '', avatarUrl: f.avatar || '',
+				links: {
+					linkedin: f.socials?.linkedin || f.linkedin || '',
+					github:   f.socials?.github   || f.github   || '',
+					website:  f.socials?.website  || '',
+					twitter:  f.socials?.twitter  || '',
+				},
+			}]));
+
 		const data = portfolio.investments.map((inv) => {
 			const idea = inv.idea_id;   
 			return {
+				founder:          idea?.founder_id ? founders.get(String(idea.founder_id)) || null : null,
 				id:               inv._id,
 				ideaId:           idea?._id || inv.idea_id,
 				name:             idea?.title      || 'Unknown',

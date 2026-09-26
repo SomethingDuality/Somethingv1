@@ -1,6 +1,8 @@
 const mongoose = require('mongoose');
 const { Idea }    = require('../models/ideas.model.js');
 const { Founder, BaseUser } = require('../models/user.model.js');
+const { Team } = require('../models/team.model.js');
+const { Portfolio } = require('../models/portfolio.model.js');
 const { pushNotification } = require('../services/notifications.service.js');
 const cache = require('../utils/cache.js');
 const tax = require('../shared/taxonomy.js');
@@ -120,8 +122,41 @@ const fetch_idea_by_id = async (req, res) => {
 		// Fire-and-forget, but never let a failed counter write become an unhandled rejection.
 		Idea.updateOne({ _id: id }, { $inc: { views: 1 } }).exec().catch(() => {});
 
+		// What an investor needs next to the pitch: who the founder is, who is on the team, and
+		// how much has been committed (a total only; individual investors stay private).
+		const [founder, team, portfolios] = await Promise.all([
+			Founder.findById(idea.founder_id).select('name headline location avatar socials linkedin github').lean(),
+			Team.findOne({ idea_id: idea._id }).select('members').lean(),
+			Portfolio.find({ 'investments.idea_id': idea._id }).select('investments.idea_id investments.amount_committed investments.amount_released').lean(),
+		]);
+		const commitments = { count: 0, total: 0, released: 0 };
+		for (const p of portfolios) {
+			for (const inv of p.investments) {
+				if (String(inv.idea_id) !== String(idea._id)) continue;
+				commitments.count += 1;
+				commitments.total += inv.amount_committed || 0;
+				commitments.released += inv.amount_released || 0;
+			}
+		}
 
-		return res.status(200).json(idea);
+		return res.status(200).json({
+			...idea,
+			founder: founder ? {
+				id:       founder._id,
+				name:     founder.name || idea.author || '',
+				headline: founder.headline || '',
+				location: founder.location || '',
+				avatarUrl: founder.avatar || '',
+				links: {
+					linkedin: founder.socials?.linkedin || founder.linkedin || '',
+					github:   founder.socials?.github   || founder.github   || '',
+					website:  founder.socials?.website  || '',
+					twitter:  founder.socials?.twitter  || '',
+				},
+			} : null,
+			team: (team?.members || []).map((m) => ({ name: m.name || 'Team member', role: m.role || '', isFounder: String(m.user_id) === String(idea.founder_id) })),
+			commitments,
+		});
 	} catch (err) {
 		console.error('fetch_idea_by_id:', err);
 		return res.status(500).json({ success: false, message: 'Internal server error' });
