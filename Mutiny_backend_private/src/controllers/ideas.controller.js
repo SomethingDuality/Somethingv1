@@ -7,6 +7,7 @@ const { pushNotification } = require('../services/notifications.service.js');
 const cache = require('../utils/cache.js');
 const tax = require('../shared/taxonomy.js');
 const { addLike, removeLike } = require('../services/likes.service.js');
+const { purgeIdeas } = require('../services/ideaPurge.js');
 const { respondLikeError } = require('./feed.controller.js');
 const { FIELDS, FieldError, sourceKey, isAnswered } = require('../profile/fields.js');
 
@@ -330,7 +331,8 @@ const delete_idea = async (req, res) => {
 			return res.status(403).json({ success: false, message: 'Not authorized to delete this idea' });
 		}
 
-		await idea.deleteOne();
+		// Removes its likes, comments, team, files and commitments too (P16, X-46).
+		await purgeIdeas([idea._id]);
 
 		publishIdeaDeleted({ ideaId: id, founderId: user_id.toString() });
 

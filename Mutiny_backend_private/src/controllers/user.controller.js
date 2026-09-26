@@ -545,21 +545,23 @@ async function delete_account(req, res) {
 	};
 
 	try {
-		
+		// Guard against one-click deletion: the user types their email to confirm.
+		const account = await BaseUser.findById(userId).select('email').lean();
+		const confirmEmail = String(req.body?.confirmEmail || '').toLowerCase().trim();
+		if (!account || confirmEmail !== account.email) {
+			return res.status(400).json({ success: false, message: 'Type your account email to confirm deletion' });
+		}
+
 		const { Idea }      = require('../models/ideas.model.js');
 		const { Like }      = require('../models/likes.model.js');
 		const { Team }      = require('../models/team.model.js');
 		const { Portfolio } = require('../models/portfolio.model.js');
+		const { purgeIdeas } = require('../services/ideaPurge.js');
 
 		if (userRole === 'Founder') {
-			
+			// Each idea goes with its likes, comments, team, files and commitments (P16).
 			const ideas = await Idea.find({ founder_id: userId }).select('_id').lean();
-			const ideaIds = ideas.map(i => i._id);
-
-			await Promise.all([
-				Idea.deleteMany({ founder_id: userId }),
-				Like.deleteMany({ postID: { $in: ideaIds } }),
-			]);
+			await purgeIdeas(ideas.map(i => i._id));
 
 			
 			const teams = await Team.find({ founder_id: userId }).select('_id members').lean();
@@ -592,7 +594,13 @@ async function delete_account(req, res) {
 			);
 		}
 
-		
+		// Take this user's likes back off the counters before deleting them (X-89).
+		// aggregate() doesn't cast, and the JWT carries the id as a string.
+		const likerId = new (require('mongoose').Types.ObjectId)(String(userId));
+		const liked = await Like.aggregate([{ $match: { userId: likerId } }, { $group: { _id: '$postID', n: { $sum: 1 } } }]);
+		if (liked.length) {
+			await Idea.bulkWrite(liked.map(({ _id, n }) => ({ updateOne: { filter: { _id }, update: { $inc: { likes: -n } } } })));
+		}
 		await Like.deleteMany({ userId });
 
 		
