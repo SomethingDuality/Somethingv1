@@ -241,6 +241,42 @@ const logout = async (req, res) => {
 	}
 };
 
+// One-click sign-in as a test account, for local development only. Both switches are read on
+// every request, so a production server answers 404 even if DEV_LOGIN leaks into its env.
+const devLoginEnabled = () => process.env.NODE_ENV !== 'production' && process.env.DEV_LOGIN === 'true';
+
+const dev_login_status = async (req, res) => {
+	if (!devLoginEnabled()) return res.status(404).json({ success: false, message: 'Not found' });
+	try {
+		const { TEST_ACCOUNTS } = require('../dev/testAccounts.js');
+		const found = await BaseUser.find({ email: { $in: TEST_ACCOUNTS.map((a) => a.email) } }).select('name email role').lean();
+		const accounts = found.map((u) => ({ role: u.role.toLowerCase(), name: u.name, email: u.email }));
+		return res.status(200).json({ accounts });
+	} catch (err) {
+		console.error('[DEV_LOGIN] status error:', err.message);
+		return res.status(500).json({ success: false, message: 'Something went wrong' });
+	}
+};
+
+const dev_login = async (req, res) => {
+	if (!devLoginEnabled()) return res.status(404).json({ success: false, message: 'Not found' });
+	const role = normalizeRole(req.body?.role);
+	if (!role) return res.status(400).json({ success: false, message: 'role must be founder or investor' });
+	try {
+		const { TEST_ACCOUNTS } = require('../dev/testAccounts.js');
+		const account = TEST_ACCOUNTS.find((a) => a.role.toLowerCase() === role);
+		const user = await BaseUser.findOne({ email: account.email });
+		if (!user) {
+			return res.status(404).json({ success: false, message: `No test ${role} in this database. Start the API with npm run dev:memory.` });
+		}
+		await startSession(res, user);
+		return res.status(200).json({ success: true, user: publicUser(user) });
+	} catch (err) {
+		console.error('[DEV_LOGIN] error:', err.message);
+		return res.status(500).json({ success: false, message: 'Something went wrong' });
+	}
+};
+
 module.exports = {
 	signup,
 	login,
@@ -252,6 +288,8 @@ module.exports = {
 	change_password,
 	google_auth,
 	delete_account,
+	dev_login_status,
+	dev_login,
 };
 
 

@@ -4,6 +4,7 @@ const router  = express.Router();
 const {
 	signup, login, me, logout, refresh,
 	forgot_password, reset_password, change_password, google_auth, delete_account,
+	dev_login_status, dev_login,
 } = require('../controllers/user.controller.js');
 const { protect } = require('../middleware/auth.middleware.js');
 const limits = require('../middleware/rateLimits.js');
@@ -29,5 +30,9 @@ router.post('/reset-password', limits.resetPasswordLimiter, reset_password);
 router.post('/change-password', protect, limits.changePasswordLimiter, change_password);
 
 router.delete('/account', protect, delete_account);
+
+// Local development only: 404 unless DEV_LOGIN=true and NODE_ENV isn't production.
+router.get('/dev-login', dev_login_status);
+router.post('/dev-login', dev_login);
 
 module.exports = router;
