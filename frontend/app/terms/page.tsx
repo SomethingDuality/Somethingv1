@@ -1,15 +1,20 @@
 "use client"
 
 import Link from "next/link"
+import { Page } from "@/components/shell/page"
+import { Wordmark, useInteriorTheme } from "@/components/shell/app-shell"
 
 export default function TermsPage() {
-  return (
-    <main className="min-h-screen px-6 py-16 bg-black/10">
-      <div className="mx-auto max-w-4xl bg-black/50 border border-white/6 rounded-lg p-10">
-        <h1 className="text-3xl font-semibold mb-4">Terms &amp; Conditions</h1>
-        <p className="text-sm text-white/70 mb-6">Last updated: {new Date().toLocaleDateString()}</p>
+  useInteriorTheme()
 
-        <article className="prose prose-invert max-w-none text-sm leading-relaxed">
+  return (
+    <div className="min-h-dvh bg-background text-foreground px-5 pt-8 pb-24 md:px-12">
+      <Wordmark href="/" />
+      <Page width="reading" className="mt-20 md:mt-28">
+        <h1 className="text-[32px] leading-[1.15] text-foreground">Terms</h1>
+        <p className="mt-3 text-[15px] text-muted-foreground">Last updated 30 September 2026</p>
+
+        <article className="mt-4 [&_h2]:mt-14 [&_h2]:text-lg [&_h2]:text-foreground [&_p]:mt-4 [&_p]:max-w-[68ch] [&_p]:text-[15px] [&_p]:leading-relaxed [&_p]:text-muted-foreground [&_a]:text-foreground [&_a]:underline [&_a]:underline-offset-4">
           <section>
             <h2>1. Introduction</h2>
             <p>
@@ -41,20 +46,26 @@ export default function TermsPage() {
           </section>
 
           <section>
-            <h2>4. Use of Your Data and Model Training</h2>
+            <h2>4. Your ideas and your data</h2>
             <p>
-              By using the Service you acknowledge and agree that User Content may be used by Something for
-              the purpose of improving our products and services, which may include training machine
-              learning models, analytics, and feature development. We will handle data in accordance
-              with any applicable privacy policy and will take commercially reasonable measures to
-              minimize personally identifiable exposure in model training sets. If you provide content
-              marked as confidential or otherwise restricted, you should not post it to the Service.
+              Your ideas stay yours. We never use your ideas to build anything of ours, and we take no
+              right to make our own versions of them.
             </p>
             <p>
-              You retain ownership of your User Content. However, by posting content to the Service you
-              grant Something a non-exclusive, worldwide, royalty-free license to use, reproduce,
-              distribute, and create derivative works from that content for the purpose of operating and
-              improving the Service, including training models and anonymized datasets.
+              We use what you give us only to run Something: showing your ideas to the people you
+              choose, and matching founders with investors and cofounders. To make matching better, it
+              may learn from structured details such as stage, sectors and region. It does not learn
+              from your ideas in order to build products or ideas of our own.
+            </p>
+            <p>
+              You grant Something only the permission it needs to store, display and match your User
+              Content as described above, for as long as you keep it on the Service.
+            </p>
+            <p>
+              We delete your ideas when you ask. Deleting an idea deletes it along with its likes,
+              comments and files, and cancels any commitments made to it. Deleting your account deletes
+              everything you posted or committed; comments you wrote on other people&apos;s ideas stay up
+              without your name.
             </p>
           </section>
 
@@ -169,7 +180,7 @@ export default function TermsPage() {
             </p>
           </section>
         </article>
-      </div>
-    </main>
+      </Page>
+    </div>
   )
 }

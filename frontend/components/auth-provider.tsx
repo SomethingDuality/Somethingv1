@@ -9,13 +9,30 @@ type User = {
   email?: string
   role?: string
   plan?: string
+  avatarUrl?: string | null
+  hasPassword?: boolean
+  authProviders?: string[]
+  isAdmin?: boolean
 } | null
+
+type GoogleExtras = { role?: "founder" | "investor"; accepted_terms?: boolean }
 
 type AuthContextShape = {
   user: User
   loading: boolean
-  login: (email: string, password: string) => Promise<void>
+  login: (email: string, password: string) => Promise<User>
+  /** Throws the axios error on failure; a 409 with code ROLE_REQUIRED means "ask for the role". */
+  loginWithGoogle: (credential: string, extras?: GoogleExtras) => Promise<User>
+  /** Re-reads /auth/me, e.g. after a profile change. */
+  refreshMe: () => Promise<User>
+  /** After signing in by any route (e.g. signup): load the user and reset per-account browser state. */
+  completeSignIn: () => Promise<User>
   logout: () => Promise<void>
+}
+
+/** Home path for a role as returned by /auth/me ("Founder" | "Investor"). */
+export function homeFor(role?: string) {
+  return role?.toLowerCase() === "investor" ? "/investor" : "/founder"
 }
 
 const AuthContext = createContext<AuthContextShape | undefined>(undefined)
@@ -63,12 +80,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       })()
     }
 
+    // auth:expired is fired by the axios interceptor when a token refresh fails
+    const expired = () => setUser(null)
+
     window.addEventListener("auth:login", handler)
-    return () => window.removeEventListener("auth:login", handler)
+    window.addEventListener("auth:expired", expired)
+    return () => {
+      window.removeEventListener("auth:login", handler)
+      window.removeEventListener("auth:expired", expired)
+    }
   }, [])
 
-  const login = async (email: string, password: string) => {
-    await apiClient.post("/auth/login", { email, password })
+  // Called after any successful sign-in: load the user and reset per-account browser state.
+  const afterAuth = async () => {
     const me = await fetchMe()
     setUser(me)
 
@@ -80,7 +104,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       localStorage.setItem("demo_name",     me.name  || "")
       localStorage.setItem("demo_email",    me.email || "")
       localStorage.setItem("demo_role",     me.role  || "founder")
-      localStorage.setItem("selected_plan", me.plan  || "free")
+    }
+    return me
+  }
+
+  const login = async (email: string, password: string) => {
+    await apiClient.post("/auth/login", { email, password })
+    return afterAuth()
+  }
+
+  const loginWithGoogle = async (credential: string, extras: GoogleExtras = {}) => {
+    await apiClient.post("/auth/google", { credential, ...extras })
+    return afterAuth()
+  }
+
+  const refreshMe = async () => {
+    try {
+      const me = await fetchMe()
+      setUser(me)
+      return me
+    } catch {
+      setUser(null)
+      return null
     }
   }
 
@@ -103,7 +148,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout }}>
+    <AuthContext.Provider value={{ user, loading, login, loginWithGoogle, refreshMe, completeSignIn: afterAuth, logout }}>
       {children}
     </AuthContext.Provider>
   )

@@ -1,25 +1,41 @@
 "use client"
 
 import React, { useEffect, useRef } from "react"
-import { useRouter } from "next/navigation"
-import { useAuth } from "./auth-provider"
+import { usePathname, useRouter } from "next/navigation"
+import { homeFor, useAuth } from "./auth-provider"
 
-export default function RequireAuth({ children }: { children: React.ReactNode }) {
+type Props = {
+  children: React.ReactNode
+  /** When set, users with the other role are sent to their own home. */
+  role?: "Founder" | "Investor"
+}
+
+export default function RequireAuth({ children, role }: Props) {
   const { user, loading } = useAuth()
   const router = useRouter()
+  const pathname = usePathname()
   const redirected = useRef(false)
+
+  const wrongRole = Boolean(user && role && user.role !== role)
 
   useEffect(() => {
     // Only redirect once — prevents the loop caused by repeated re-renders
-    if (!loading && !user && !redirected.current) {
+    if (loading || redirected.current) return
+    if (!user) {
       redirected.current = true
-      router.push('/login')
+      router.replace(`/login?next=${encodeURIComponent(pathname || "/")}`)
+    } else if (wrongRole) {
+      redirected.current = true
+      router.replace(homeFor(user.role))
     }
-    // Reset if user becomes authenticated again (e.g. after token refresh)
-    if (user) redirected.current = false
-  }, [loading, user]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [loading, user, wrongRole]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (loading || !user) return null
+  // Reset once the user is valid again (e.g. after logging in from another tab)
+  useEffect(() => {
+    if (user && !wrongRole) redirected.current = false
+  }, [user, wrongRole])
+
+  if (loading || !user || wrongRole) return null
 
   return <>{children}</>
 }
