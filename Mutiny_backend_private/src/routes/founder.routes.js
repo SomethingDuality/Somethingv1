@@ -3,7 +3,7 @@ const multer  = require('multer');
 const path    = require('path');
 const router  = express.Router();
 
-const { get_profile, update_profile, update_avatar, get_overview } = require('../controllers/founder.controller.js');
+const { get_profile, update_profile, update_avatar, get_overview, get_funding } = require('../controllers/founder.controller.js');
 const { protect } = require('../middleware/auth.middleware.js');
 
 
@@ -47,5 +47,7 @@ router.post('/avatar', upload.single('avatar'), update_avatar);
 
 
 router.get('/overview', get_overview);
+router.get('/funding',  get_funding);
+
 
 module.exports = router;

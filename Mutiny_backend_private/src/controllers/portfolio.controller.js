@@ -130,7 +130,7 @@ const get_portfolio = async (req, res) => {
 			.findOne({ investor_id: req.user._id })
 			.populate({
 				path:   'investments.idea_id',
-				select: 'title stage tags founder_id author likes views'
+				select: 'title stage tags founder_id author likes views milestones'
 			})
 			.lean();
 
@@ -171,7 +171,9 @@ const get_portfolio = async (req, res) => {
 				committed:        inv.amount_committed,
 				released:         inv.amount_released,
 				status:           inv.status,
-				committed_at:     inv.committed_at
+				committed_at:     inv.committed_at,
+				releases:         (inv.releases || []).map((r) => ({ amount: r.amount, milestoneId: r.milestone_id, at: r.at })),
+				milestones:       (idea?.milestones || []).map((m) => ({ id: m._id, title: m.title, status: m.status, doneAt: m.doneAt }))
 			};
 		});
 
@@ -228,10 +230,13 @@ async function release(req, res) {
 	if (!assertInvestor(req, res)) return;
 
 	const { investmentId } = req.params;
-	const { amount } = req.body;
+	const { amount, milestoneId } = req.body || {};
 
 	if (!mongoose.Types.ObjectId.isValid(investmentId)) {
 		return res.status(400).json({ success: false, message: 'Invalid investment ID' });
+	}
+	if (milestoneId !== undefined && milestoneId !== null && !mongoose.Types.ObjectId.isValid(milestoneId)) {
+		return res.status(400).json({ success: false, message: 'Invalid milestone ID' });
 	}
 	if (!validAmount(amount)) {
 		return res.status(400).json({ success: false, message: 'Enter an amount between $1 and $1,000,000,000' });
@@ -258,7 +263,19 @@ async function release(req, res) {
 			});
 		}
 
+		// A release can be for a milestone the founder marked done on this idea.
+		let milestone = null;
+		if (milestoneId) {
+			const ideaDoc = await Idea.findById(investment.idea_id).select('milestones').lean();
+			milestone = (ideaDoc?.milestones || []).find((m) => String(m._id) === String(milestoneId)) || null;
+			if (!milestone) return res.status(404).json({ success: false, message: 'Milestone not found on this idea' });
+			if (milestone.status !== 'done') {
+				return res.status(409).json({ success: false, message: 'The founder hasn\'t marked this milestone done yet' });
+			}
+		}
+
 		investment.amount_released += releaseAmount;
+		investment.releases.push({ amount: releaseAmount, milestone_id: milestone?._id ?? null, at: new Date() });
 
 		
 		if (investment.amount_released >= investment.amount_committed) {
@@ -290,7 +307,7 @@ async function release(req, res) {
 
 			await pushNotification(
 				idea.founder_id,
-				`${investorName}${firmSuffix} released $${releaseAmount.toLocaleString()} for "${idea.title}"`
+				`${investorName}${firmSuffix} released $${releaseAmount.toLocaleString()} for “${idea.title}”${milestone ? ` (milestone “${milestone.title}”)` : ''}`
 			);
 		}
 

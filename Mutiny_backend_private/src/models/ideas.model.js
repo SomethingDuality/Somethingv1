@@ -1,5 +1,12 @@
 const mongoose = require('mongoose');
 
+const milestoneSchema = new mongoose.Schema({
+	title:  { type: String, required: true, maxlength: 120 },
+	status: { type: String, enum: ['open', 'done'], default: 'open' },
+	doneAt: { type: Date, default: null },
+	proof:  { type: String, default: '', maxlength: 500 },
+}, { timestamps: true });
+
 const attachmentSchema = new mongoose.Schema({
 	name: { type: String, required: true },
 	size: { type: String },
@@ -58,6 +65,9 @@ const ideaSchema = new mongoose.Schema({
 	},
 
 	attachments: [attachmentSchema],
+
+	// What the founder will show progress on; investors record releases against done ones.
+	milestones: { type: [milestoneSchema], default: [] },
 
 	likes:    { type: Number, default: 0 },
 	views:    { type: Number, default: 0 },

@@ -277,4 +277,68 @@ const get_overview = async (req, res) => {
 	}
 };
 
-module.exports = { get_profile, update_profile, update_avatar, get_overview };
+// The founder's funding, idea by idea: who committed (money reveals identity), what each has
+// released, and how much was released against each milestone. All of it is recorded intent:
+// no money moves on Something yet.
+const get_funding = async (req, res) => {
+	if (!assertFounder(req, res)) return;
+	try {
+		const { Investor } = require('../models/user.model.js');
+		const ideas = await Idea.find({ founder_id: req.user._id }).sort({ createdAt: -1 })
+			.select('title tags stage isDraft milestones createdAt').lean();
+		const ideaIds = ideas.map((i) => i._id);
+		const portfolios = ideaIds.length
+			? await Portfolio.find({ 'investments.idea_id': { $in: ideaIds } }).select('investor_id investments').lean()
+			: [];
+		const investors = new Map((await Investor.find({ _id: { $in: portfolios.map((p) => p.investor_id) } })
+			.select('name firm avatar verification.status').lean())
+			.map((u) => [String(u._id), u]));
+
+		const byIdea = new Map(ideas.map((i) => [String(i._id), { committed: 0, released: 0, investors: [], releasedByMilestone: {} }]));
+		for (const p of portfolios) {
+			const who = investors.get(String(p.investor_id));
+			for (const inv of p.investments) {
+				const row = byIdea.get(String(inv.idea_id));
+				if (!row) continue;
+				row.committed += inv.amount_committed || 0;
+				row.released  += inv.amount_released  || 0;
+				row.investors.push({
+					name:        who?.name || 'An investor',
+					firm:        who?.firm || '',
+					avatarUrl:   who?.avatar || '',
+					verified:    who?.verification?.status === 'verified',
+					committed:   inv.amount_committed || 0,
+					released:    inv.amount_released  || 0,
+					committedAt: inv.committed_at,
+				});
+				for (const r of inv.releases || []) {
+					if (!r.milestone_id) continue;
+					const k = String(r.milestone_id);
+					row.releasedByMilestone[k] = (row.releasedByMilestone[k] || 0) + (r.amount || 0);
+				}
+			}
+		}
+
+		const out = ideas.map((i) => ({
+			id:         i._id,
+			title:      i.title,
+			tags:       i.tags || [],
+			stage:      i.stage || '',
+			isDraft:    Boolean(i.isDraft),
+			milestones: (i.milestones || []).map((m) => ({ id: m._id, title: m.title, status: m.status, doneAt: m.doneAt })),
+			...byIdea.get(String(i._id)),
+		}));
+		const totals = out.reduce((t, x) => ({
+			committed: t.committed + x.committed,
+			released:  t.released + x.released,
+			investors: t.investors + x.investors.length,
+		}), { committed: 0, released: 0, investors: 0 });
+
+		return res.status(200).json({ totals, ideas: out });
+	} catch (err) {
+		console.error('get_funding:', err);
+		return res.status(500).json({ success: false, message: 'Internal server error' });
+	}
+};
+
+module.exports = { get_profile, update_profile, update_avatar, get_overview, get_funding };

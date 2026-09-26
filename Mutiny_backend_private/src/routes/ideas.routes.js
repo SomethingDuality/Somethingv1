@@ -26,6 +26,8 @@ const {
 } = require('../controllers/comments.controller.js');
 
 const { protect, optionalAuth } = require('../middleware/auth.middleware.js');
+const { list_updates, post_update, delete_update, request_update } = require('../controllers/updates.controller.js');
+const { add_milestone, update_milestone, delete_milestone } = require('../controllers/milestones.controller.js');
 
 
 
@@ -86,6 +88,17 @@ router.delete('/:id/attachments/:filename',   protect, delete_attachment);
 
 
 router.post('/:id/collaborate',               protect, request_collaboration);
+
+// Founder updates; investors can ask for one (once a week per idea).
+router.get('/:id/updates',                   optionalAuth, list_updates);
+router.post('/:id/updates',                  protect, post_update);
+router.delete('/:id/updates/:updateId',      protect, delete_update);
+router.post('/:id/request-update',           protect, request_update);
+
+// Milestones (the founder's); investors record releases against done ones.
+router.post('/:id/milestones',               protect, add_milestone);
+router.put('/:id/milestones/:mid',           protect, update_milestone);
+router.delete('/:id/milestones/:mid',        protect, delete_milestone);
 
 
 router.get('/:id/comments',                   get_comments);

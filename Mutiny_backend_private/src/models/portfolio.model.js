@@ -24,7 +24,13 @@ const investmentSchema = new mongoose.Schema({
 	committed_at: {
 		type: Date,
 		default: Date.now
-	}
+	},
+	// Each release recorded against this commitment (no money moves); a milestone when it was for one.
+	releases: [{
+		amount:       { type: Number, required: true, min: 0 },
+		milestone_id: { type: mongoose.Schema.Types.ObjectId, default: null },
+		at:           { type: Date, default: Date.now },
+	}]
 }, { _id: true });
 
 
