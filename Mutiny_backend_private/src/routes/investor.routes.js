@@ -13,6 +13,7 @@ const {
 	get_watchlist,
 	save_idea,
 	unsave_idea,
+	submit_verification,
 } = require('../controllers/investor.controller.js');
 
 const {
@@ -45,6 +46,7 @@ router.put('/profile',            update_profile);
 router.put('/preferences',        update_preferences);
 router.put('/interests',          update_interests);
 router.put('/visibility',         update_visibility);
+router.post('/verification',             submit_verification);
 router.get('/watchlist',                 get_watchlist);
 router.post('/watchlist/:ideaId',        save_idea);
 router.delete('/watchlist/:ideaId',      unsave_idea);

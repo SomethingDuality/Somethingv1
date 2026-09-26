@@ -64,6 +64,13 @@ const toProfileShape = (doc) => {
 		vehicles:               tax.normalizeList('vehicles', doc.vehicles || []),
 		superpowers:            tax.normalizeList('superpowers', doc.superpowers || []),
 		coInvestors:            doc.coInvestors             || [],
+		verification: {
+			status:      doc.verification?.status      || 'none',
+			linkedin:    doc.verification?.linkedin    || '',
+			submittedAt: doc.verification?.submittedAt || null,
+			reviewedAt:  doc.verification?.reviewedAt  || null,
+			note:        doc.verification?.note        || '',
+		},
 		// Fields the investor actually set (vs schema defaults like minCheck 5000).
 		knownFields:            fieldSourceKeys(doc),
 	};
@@ -164,6 +171,41 @@ const update_avatar = async (req, res) => {
 	}
 };
 
+// P13: ask to be verified with a LinkedIn link (saved to the profile as well); an admin then
+// approves or declines it by hand. Admins get a notification for each new request.
+const submit_verification = async (req, res) => {
+	if (!assertInvestor(req, res)) return;
+	try {
+		const current = await Investor.findById(req.user._id).select('verification name').lean();
+		if (current?.verification?.status === 'verified') {
+			return res.status(409).json({ success: false, message: 'You are already verified' });
+		}
+		// An empty link must not clear the one already on the profile.
+		if (typeof req.body?.linkedin !== 'string' || !req.body.linkedin.trim()) {
+			return res.status(422).json({ success: false, field: 'linkedin', message: 'Add your LinkedIn link' });
+		}
+		// Validates the link exactly like the profile field does, and records where it came from.
+		const doc = await applyUpdate({ userId: req.user._id, role: 'Investor', patch: { linkedin: req.body?.linkedin ?? '' }, source: 'profile' });
+		if (!doc?.linkedin) return res.status(422).json({ success: false, field: 'linkedin', message: 'Add your LinkedIn link' });
+
+		const submittedAt = new Date();
+		await Investor.updateOne({ _id: req.user._id }, { $set: { verification: { status: 'pending', linkedin: doc.linkedin, submittedAt, reviewedAt: null, note: '' } } });
+
+		const { adminEmails } = require('../middleware/admin.middleware.js');
+		const { BaseUser } = require('../models/user.model.js');
+		const { pushNotification } = require('../services/notifications.service.js');
+		const admins = await BaseUser.find({ email: { $in: adminEmails() } }).select('_id').lean();
+		await Promise.all(admins.map((a) => pushNotification(a._id, `${current?.name || 'An investor'} asked to be verified`, { key: `verify:${req.user._id}:${submittedAt.getTime()}` })));
+
+		const fresh = await Investor.findById(req.user._id).select(PROFILE_SELECT).lean();
+		return res.status(200).json(toProfileShape(fresh));
+	} catch (err) {
+		if (err instanceof FieldError) return res.status(422).json({ success: false, field: err.path, message: err.message });
+		console.error('submit_verification:', err);
+		return res.status(500).json({ success: false, message: 'Internal server error' });
+	}
+};
+
 const WATCHLIST_MAX = 500;
 
 // The saved ideas, newest saved last (the order they were saved in). Drafts and deleted ideas
@@ -230,6 +272,7 @@ const unsave_idea = async (req, res) => {
 };
 
 module.exports = {
+	submit_verification,
 	get_watchlist,
 	save_idea,
 	unsave_idea,

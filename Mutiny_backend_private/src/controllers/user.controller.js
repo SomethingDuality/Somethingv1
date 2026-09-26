@@ -154,6 +154,7 @@ const me = async (req, res) => {
 			plan:          user.plan,
 			avatarUrl:     user.avatar || null,
 			hasPassword:   Boolean(user.password),
+			isAdmin:       require('../middleware/admin.middleware.js').isAdminEmail(user.email),
 			authProviders: user.authProviders?.length ? user.authProviders : ['password'],
 		});
 	} catch (err) {

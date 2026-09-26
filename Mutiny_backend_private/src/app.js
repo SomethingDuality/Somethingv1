@@ -15,6 +15,7 @@ const notificationsRoutes = require('./routes/notifications.routes.js');
 const feedRoutes          = require('./routes/feed.routes.js');
 const teamRoutes          = require('./routes/team.routes.js');
 const questionsRoutes     = require('./routes/questions.routes.js');
+const adminRoutes         = require('./routes/admin.routes.js');
 
 const app = express();
 
@@ -37,6 +38,7 @@ app.use('/notifications', notificationsRoutes);
 app.use('/feed',          feedRoutes);
 app.use('/teams',         teamRoutes);
 app.use('/questions',     questionsRoutes);
+app.use('/admin',         adminRoutes);
 
 app.get('/health', (_, res) => {
 	const mongo = mongoose.connection.readyState === 1 ? 'up' : 'down';

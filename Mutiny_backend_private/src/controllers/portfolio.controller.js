@@ -90,15 +90,16 @@ const commit = async (req, res) => {
 		if (idea.founder_id) {
 			const investor = await Investor
 				.findById(req.user._id)
-				.select('name firm')
+				.select('name firm verification.status')
 				.lean();
 
 			const investorName = investor?.name || 'An investor';
 			const firmSuffix   = investor?.firm ? ` (${investor.firm})` : '';
+			const verified     = investor?.verification?.status === 'verified' ? ', verified investor' : '';
 
 			await pushNotification(
 				idea.founder_id,
-				`${investorName}${firmSuffix} committed $${Number(amount).toLocaleString()} to your idea "${idea.title}"`
+				`${investorName}${firmSuffix}${verified} committed $${Number(amount).toLocaleString()} to your idea “${idea.title}”`
 			);
 		}
 
