@@ -1,0 +1,749 @@
+{
+  "version": 1,
+  "contexts": {
+    "investor_matching": {
+      "label": "Investor matching"
+    },
+    "publish_idea": {
+      "label": "Posting your idea"
+    },
+    "ai_review": {
+      "label": "Something & Nothing review"
+    },
+    "cofounder_matching": {
+      "label": "Finding co-founders"
+    },
+    "founder_matching": {
+      "label": "Founder matching"
+    },
+    "deal_flow": {
+      "label": "Your deal flow"
+    },
+    "commit_funds": {
+      "label": "Committing funds"
+    },
+    "profile_public": {
+      "label": "Your public profile"
+    },
+    "trust": {
+      "label": "Trust"
+    },
+    "proof_of_work": {
+      "label": "Proof of work"
+    },
+    "nda": {
+      "label": "NDAs"
+    },
+    "start_chat": {
+      "label": "Starting a chat"
+    },
+    "collaborate": {
+      "label": "Collaborating"
+    }
+  },
+  "questions": [
+    {
+      "id": "f_sectors",
+      "roles": [
+        "Founder"
+      ],
+      "entity": "user",
+      "fields": [
+        "interests"
+      ],
+      "type": "chips",
+      "prompt": "Which spaces are you building in?",
+      "help": "So we show you the right investors and co-founders.",
+      "options": {
+        "from": "sectors"
+      },
+      "select": {
+        "min": 1,
+        "max": 3
+      },
+      "unlocks": [
+        "investor_matching",
+        "ai_review",
+        "publish_idea"
+      ],
+      "priority": 90
+    },
+    {
+      "id": "idea_stage",
+      "roles": [
+        "Founder"
+      ],
+      "entity": "idea",
+      "fields": [
+        "stage"
+      ],
+      "type": "chips",
+      "prompt": "What stage is “{ideaTitle}” at?",
+      "help": "Investors filter by stage.",
+      "options": {
+        "from": "ideaStages"
+      },
+      "select": {
+        "min": 1,
+        "max": 1
+      },
+      "unlocks": [
+        "publish_idea",
+        "investor_matching",
+        "ai_review"
+      ],
+      "priority": 88
+    },
+    {
+      "id": "f_skills",
+      "roles": [
+        "Founder"
+      ],
+      "entity": "user",
+      "fields": [
+        "skills"
+      ],
+      "type": "chips",
+      "prompt": "What do you bring to a team?",
+      "help": "Co-founders look for complementary skills.",
+      "options": {
+        "from": "skills"
+      },
+      "select": {
+        "min": 1,
+        "max": 5
+      },
+      "allowCustom": true,
+      "unlocks": [
+        "cofounder_matching",
+        "collaborate"
+      ],
+      "priority": 80
+    },
+    {
+      "id": "idea_sectors",
+      "roles": [
+        "Founder"
+      ],
+      "entity": "idea",
+      "fields": [
+        "tags"
+      ],
+      "type": "chips",
+      "prompt": "Which sectors fit “{ideaTitle}”?",
+      "help": "Helps investors in those sectors find it.",
+      "options": {
+        "from": "sectors"
+      },
+      "select": {
+        "min": 1,
+        "max": 3
+      },
+      "unlocks": [
+        "publish_idea",
+        "investor_matching"
+      ],
+      "priority": 78
+    },
+    {
+      "id": "f_headline",
+      "roles": [
+        "Founder"
+      ],
+      "entity": "user",
+      "fields": [
+        "headline"
+      ],
+      "type": "text",
+      "prompt": "How would you describe yourself in one line?",
+      "help": "Shown on your profile card.",
+      "placeholder": "e.g. Ex-Flipkart PM building for farmers",
+      "maxLength": 80,
+      "unlocks": [
+        "profile_public"
+      ],
+      "priority": 70
+    },
+    {
+      "id": "f_location",
+      "roles": [
+        "Founder"
+      ],
+      "entity": "user",
+      "fields": [
+        "location"
+      ],
+      "type": "text",
+      "prompt": "Where are you based?",
+      "help": "Some investors only back certain regions.",
+      "placeholder": "City",
+      "maxLength": 60,
+      "suggestions": {
+        "from": "locations"
+      },
+      "unlocks": [
+        "investor_matching"
+      ],
+      "priority": 62
+    },
+    {
+      "id": "idea_looking_for",
+      "roles": [
+        "Founder"
+      ],
+      "entity": "idea",
+      "fields": [
+        "lookingFor"
+      ],
+      "type": "chips",
+      "prompt": "Who are you looking for on “{ideaTitle}”?",
+      "help": "We point matching people to your idea.",
+      "options": {
+        "from": "roles"
+      },
+      "select": {
+        "min": 1,
+        "max": 5
+      },
+      "allowCustom": true,
+      "unlocks": [
+        "cofounder_matching",
+        "publish_idea"
+      ],
+      "priority": 60
+    },
+    {
+      "id": "idea_raising",
+      "roles": [
+        "Founder"
+      ],
+      "entity": "idea",
+      "fields": [
+        "raising"
+      ],
+      "type": "chips",
+      "prompt": "How much are you raising for “{ideaTitle}”?",
+      "help": "Investors filter by it. “Not raising” is a fine answer.",
+      "options": {
+        "from": "raisingBands"
+      },
+      "select": {
+        "min": 1,
+        "max": 1
+      },
+      "unlocks": [
+        "investor_matching",
+        "publish_idea"
+      ],
+      "priority": 70
+    },
+    {
+      "id": "f_linkedin",
+      "roles": [
+        "Founder"
+      ],
+      "entity": "user",
+      "fields": [
+        "socials.linkedin"
+      ],
+      "type": "text",
+      "format": "url",
+      "prompt": "Your LinkedIn profile?",
+      "help": "Investors check who's behind an idea.",
+      "placeholder": "linkedin.com/in/you",
+      "maxLength": 200,
+      "unlocks": [
+        "profile_public",
+        "trust"
+      ],
+      "priority": 55
+    },
+    {
+      "id": "f_occupation",
+      "roles": [
+        "Founder"
+      ],
+      "entity": "user",
+      "fields": [
+        "occupation"
+      ],
+      "type": "chips",
+      "prompt": "What do you do today?",
+      "help": "Gives the reviewers context on your idea.",
+      "options": {
+        "from": "occupations"
+      },
+      "select": {
+        "min": 1,
+        "max": 1
+      },
+      "unlocks": [
+        "ai_review"
+      ],
+      "priority": 50
+    },
+    {
+      "id": "f_github",
+      "roles": [
+        "Founder"
+      ],
+      "entity": "user",
+      "fields": [
+        "socials.github"
+      ],
+      "type": "text",
+      "format": "url",
+      "prompt": "Your GitHub, if you have one?",
+      "help": "Code you've shipped is proof of work.",
+      "placeholder": "github.com/you",
+      "maxLength": 200,
+      "unlocks": [
+        "proof_of_work"
+      ],
+      "priority": 50
+    },
+    {
+      "id": "f_experience_level",
+      "roles": [
+        "Founder"
+      ],
+      "entity": "user",
+      "fields": [
+        "experience_level"
+      ],
+      "type": "chips",
+      "prompt": "How much experience do you have?",
+      "help": "Gives the reviewers context on your idea.",
+      "options": {
+        "from": "experienceLevels"
+      },
+      "select": {
+        "min": 1,
+        "max": 1
+      },
+      "unlocks": [
+        "ai_review"
+      ],
+      "priority": 45
+    },
+    {
+      "id": "f_about",
+      "roles": [
+        "Founder"
+      ],
+      "entity": "user",
+      "fields": [
+        "about"
+      ],
+      "type": "text",
+      "format": "long",
+      "prompt": "A few lines about you?",
+      "help": "Shown on your profile.",
+      "maxLength": 600,
+      "unlocks": [
+        "profile_public"
+      ],
+      "priority": 40
+    },
+    {
+      "id": "f_website",
+      "roles": [
+        "Founder"
+      ],
+      "entity": "user",
+      "fields": [
+        "socials.website"
+      ],
+      "type": "text",
+      "format": "url",
+      "prompt": "A personal or project website?",
+      "help": "Shown on your profile.",
+      "maxLength": 200,
+      "unlocks": [
+        "profile_public"
+      ],
+      "priority": 30
+    },
+    {
+      "id": "f_twitter",
+      "roles": [
+        "Founder"
+      ],
+      "entity": "user",
+      "fields": [
+        "socials.twitter"
+      ],
+      "type": "text",
+      "format": "handle",
+      "prompt": "Your X / Twitter handle?",
+      "maxLength": 60,
+      "unlocks": [],
+      "priority": 15
+    },
+    {
+      "id": "i_sectors",
+      "roles": [
+        "Investor"
+      ],
+      "entity": "user",
+      "fields": [
+        "interests"
+      ],
+      "type": "chips",
+      "prompt": "Which sectors do you invest in?",
+      "help": "So we only show you ideas in your sectors.",
+      "options": {
+        "from": "sectors"
+      },
+      "select": {
+        "min": 1,
+        "max": 5
+      },
+      "unlocks": [
+        "investor_matching",
+        "deal_flow"
+      ],
+      "priority": 95
+    },
+    {
+      "id": "i_stages",
+      "roles": [
+        "Investor"
+      ],
+      "entity": "user",
+      "fields": [
+        "stageFocus"
+      ],
+      "type": "chips",
+      "prompt": "Which stages do you back?",
+      "help": "We filter ideas by the stages you invest at.",
+      "options": {
+        "from": "fundingStages"
+      },
+      "select": {
+        "min": 1,
+        "max": 4
+      },
+      "unlocks": [
+        "investor_matching",
+        "deal_flow",
+        "start_chat"
+      ],
+      "priority": 90
+    },
+    {
+      "id": "i_check_size",
+      "roles": [
+        "Investor"
+      ],
+      "entity": "user",
+      "fields": [
+        "minCheck",
+        "maxCheck"
+      ],
+      "writer": "checkSize",
+      "type": "chips",
+      "prompt": "What's your typical check size?",
+      "help": "Used to prefill commitments and match the ask.",
+      "options": {
+        "from": "checkSizes"
+      },
+      "select": {
+        "min": 1,
+        "max": 1
+      },
+      "unlocks": [
+        "investor_matching",
+        "commit_funds"
+      ],
+      "priority": 80
+    },
+    {
+      "id": "i_firm",
+      "roles": [
+        "Investor"
+      ],
+      "entity": "user",
+      "fields": [
+        "firm"
+      ],
+      "type": "text",
+      "prompt": "Which firm or fund are you with?",
+      "help": "Leave it and skip if you invest personally.",
+      "placeholder": "Firm or fund name",
+      "maxLength": 80,
+      "unlocks": [
+        "trust"
+      ],
+      "priority": 70
+    },
+    {
+      "id": "i_lead",
+      "roles": [
+        "Investor"
+      ],
+      "entity": "user",
+      "fields": [
+        "leadStatus"
+      ],
+      "type": "chips",
+      "prompt": "Do you usually lead rounds or follow?",
+      "help": "Founders look for a lead first.",
+      "options": {
+        "inline": [
+          {
+            "id": "lead",
+            "label": "I lead"
+          },
+          {
+            "id": "follow",
+            "label": "I follow"
+          },
+          {
+            "id": "both",
+            "label": "Either"
+          }
+        ]
+      },
+      "select": {
+        "min": 1,
+        "max": 1
+      },
+      "unlocks": [
+        "investor_matching"
+      ],
+      "priority": 55
+    },
+    {
+      "id": "i_linkedin",
+      "roles": [
+        "Investor"
+      ],
+      "entity": "user",
+      "fields": [
+        "linkedin"
+      ],
+      "type": "text",
+      "format": "url",
+      "prompt": "Your LinkedIn profile?",
+      "help": "Founders check who's reaching out.",
+      "placeholder": "linkedin.com/in/you",
+      "maxLength": 200,
+      "unlocks": [
+        "trust"
+      ],
+      "priority": 50
+    },
+    {
+      "id": "i_bio",
+      "roles": [
+        "Investor"
+      ],
+      "entity": "user",
+      "fields": [
+        "bio"
+      ],
+      "type": "text",
+      "format": "long",
+      "prompt": "A few lines about how you invest?",
+      "help": "Shown to founders you talk to.",
+      "maxLength": 400,
+      "unlocks": [
+        "profile_public"
+      ],
+      "priority": 45
+    },
+    {
+      "id": "i_pace",
+      "roles": [
+        "Investor"
+      ],
+      "entity": "user",
+      "fields": [
+        "pacePerQuarter"
+      ],
+      "writer": "pace",
+      "type": "chips",
+      "prompt": "How many deals do you do a quarter?",
+      "help": "So we don't flood you with ideas.",
+      "options": {
+        "from": "paceBuckets"
+      },
+      "select": {
+        "min": 1,
+        "max": 1
+      },
+      "unlocks": [
+        "deal_flow"
+      ],
+      "priority": 40
+    },
+    {
+      "id": "i_superpowers",
+      "roles": [
+        "Investor"
+      ],
+      "entity": "user",
+      "fields": [
+        "superpowers"
+      ],
+      "type": "chips",
+      "prompt": "Beyond money, how do you help?",
+      "help": "Founders value hands-on help.",
+      "options": {
+        "from": "superpowers"
+      },
+      "select": {
+        "min": 1,
+        "max": 3
+      },
+      "unlocks": [
+        "founder_matching"
+      ],
+      "priority": 35
+    },
+    {
+      "id": "i_pref_nda",
+      "roles": [
+        "Investor"
+      ],
+      "entity": "user",
+      "fields": [
+        "ndaPreference"
+      ],
+      "type": "yes_no",
+      "allowMaybe": true,
+      "prompt": "Are you fine signing NDAs before seeing details?",
+      "unlocks": [
+        "nda"
+      ],
+      "priority": 30
+    },
+    {
+      "id": "i_pref_escrow",
+      "roles": [
+        "Investor"
+      ],
+      "entity": "user",
+      "fields": [
+        "escrowPreference"
+      ],
+      "type": "yes_no",
+      "allowMaybe": true,
+      "prompt": "Would you commit through milestone escrow?",
+      "unlocks": [
+        "commit_funds"
+      ],
+      "priority": 30
+    },
+    {
+      "id": "i_pref_open_source",
+      "roles": [
+        "Investor"
+      ],
+      "entity": "user",
+      "fields": [
+        "openSourcePreference"
+      ],
+      "type": "yes_no",
+      "allowMaybe": true,
+      "prompt": "Open to open-source companies?",
+      "unlocks": [
+        "investor_matching"
+      ],
+      "priority": 25
+    },
+    {
+      "id": "i_pref_hardware",
+      "roles": [
+        "Investor"
+      ],
+      "entity": "user",
+      "fields": [
+        "hardwarePreference"
+      ],
+      "type": "yes_no",
+      "allowMaybe": true,
+      "prompt": "Open to hardware companies?",
+      "unlocks": [
+        "investor_matching"
+      ],
+      "priority": 25
+    },
+    {
+      "id": "i_pref_crypto",
+      "roles": [
+        "Investor"
+      ],
+      "entity": "user",
+      "fields": [
+        "cryptographyPreference"
+      ],
+      "type": "yes_no",
+      "allowMaybe": true,
+      "prompt": "Open to crypto / Web3 companies?",
+      "unlocks": [
+        "investor_matching"
+      ],
+      "priority": 25
+    },
+    {
+      "id": "i_twitter",
+      "roles": [
+        "Investor"
+      ],
+      "entity": "user",
+      "fields": [
+        "twitter"
+      ],
+      "type": "text",
+      "format": "handle",
+      "prompt": "Your X / Twitter handle?",
+      "maxLength": 60,
+      "unlocks": [],
+      "priority": 15
+    },
+    {
+      "id": "i_vehicles",
+      "roles": [
+        "Investor"
+      ],
+      "entity": "user",
+      "fields": [
+        "vehicles"
+      ],
+      "type": "chips",
+      "prompt": "How do you invest?",
+      "options": {
+        "from": "vehicles"
+      },
+      "select": {
+        "min": 1,
+        "max": 3
+      },
+      "unlocks": [],
+      "priority": 15
+    },
+    {
+      "id": "i_legal_structures",
+      "roles": [
+        "Investor"
+      ],
+      "entity": "user",
+      "fields": [
+        "legalStructures"
+      ],
+      "type": "chips",
+      "prompt": "Which company structures can you invest in?",
+      "options": {
+        "from": "legalStructures"
+      },
+      "select": {
+        "min": 1,
+        "max": 3
+      },
+      "unlocks": [],
+      "priority": 10
+    }
+  ]
+}

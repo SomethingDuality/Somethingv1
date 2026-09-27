@@ -1,0 +1,734 @@
+{
+  "version": 1,
+  "sectors": [
+    {
+      "id": "ai_ml",
+      "label": "AI / ML",
+      "aliases": [
+        "AI/ML",
+        "AI",
+        "ML",
+        "Edge AI",
+        "Machine Learning"
+      ]
+    },
+    {
+      "id": "climate",
+      "label": "Climate",
+      "aliases": [
+        "Climate hardware",
+        "Cleantech",
+        "Energy"
+      ]
+    },
+    {
+      "id": "health",
+      "label": "Health",
+      "aliases": [
+        "HealthTech",
+        "Bio tooling",
+        "Biotech",
+        "Medtech"
+      ]
+    },
+    {
+      "id": "fintech",
+      "label": "Fintech",
+      "aliases": [
+        "FinTech",
+        "DeFi",
+        "Payments"
+      ]
+    },
+    {
+      "id": "web3",
+      "label": "Web3",
+      "aliases": [
+        "Blockchain",
+        "DePIN",
+        "Crypto"
+      ]
+    },
+    {
+      "id": "consumer",
+      "label": "Consumer",
+      "aliases": [
+        "Mobile App",
+        "Creator infra",
+        "Creator economy"
+      ]
+    },
+    {
+      "id": "saas_b2b",
+      "label": "SaaS / B2B",
+      "aliases": [
+        "SaaS",
+        "B2B",
+        "Enterprise"
+      ]
+    },
+    {
+      "id": "dev_tools",
+      "label": "Developer tools",
+      "aliases": [
+        "Developer Tools",
+        "Open Source",
+        "Local-first",
+        "Local‑first",
+        "DevTools"
+      ]
+    },
+    {
+      "id": "deep_tech",
+      "label": "Deep tech",
+      "aliases": [
+        "Deep Tech",
+        "Robotics",
+        "Hardware",
+        "Semiconductors"
+      ]
+    },
+    {
+      "id": "privacy_security",
+      "label": "Privacy & security",
+      "aliases": [
+        "Privacy",
+        "Security",
+        "Cybersecurity"
+      ]
+    },
+    {
+      "id": "education",
+      "label": "Education",
+      "aliases": [
+        "EdTech",
+        "Edtech"
+      ]
+    },
+    {
+      "id": "agri_food",
+      "label": "Agri & food",
+      "aliases": [
+        "Agritech",
+        "AgriTech",
+        "Food"
+      ]
+    }
+  ],
+  "ideaStages": [
+    {
+      "id": "concept",
+      "label": "Concept",
+      "description": "Validate specs & draft theory",
+      "aliases": []
+    },
+    {
+      "id": "prototype",
+      "label": "Prototype",
+      "description": "Initial functional alpha build",
+      "aliases": []
+    },
+    {
+      "id": "mvp",
+      "label": "MVP",
+      "description": "Core features live & usable",
+      "aliases": []
+    },
+    {
+      "id": "launched",
+      "label": "Launched",
+      "description": "Production release deployed",
+      "aliases": []
+    }
+  ],
+  "fundingStages": [
+    {
+      "id": "angel",
+      "label": "Angel",
+      "aliases": [
+        "Angel Pool"
+      ],
+      "typicalIdeaStages": [
+        "concept",
+        "prototype"
+      ]
+    },
+    {
+      "id": "pre_seed",
+      "label": "Pre-seed",
+      "aliases": [
+        "preseed",
+        "Pre‑seed",
+        "Pre seed"
+      ],
+      "typicalIdeaStages": [
+        "concept",
+        "prototype",
+        "mvp"
+      ]
+    },
+    {
+      "id": "seed",
+      "label": "Seed",
+      "aliases": [],
+      "typicalIdeaStages": [
+        "prototype",
+        "mvp",
+        "launched"
+      ]
+    },
+    {
+      "id": "series_a",
+      "label": "Series A",
+      "aliases": [],
+      "typicalIdeaStages": [
+        "mvp",
+        "launched"
+      ]
+    },
+    {
+      "id": "series_b_plus",
+      "label": "Series B+",
+      "aliases": [
+        "Series B",
+        "Series C",
+        "Growth",
+        "growth"
+      ],
+      "typicalIdeaStages": [
+        "launched"
+      ]
+    },
+    {
+      "id": "grants",
+      "label": "Grants / non-dilutive",
+      "aliases": [
+        "Grants",
+        "Non-dilutive",
+        "Non‑dilutive"
+      ],
+      "typicalIdeaStages": [
+        "concept",
+        "prototype",
+        "mvp",
+        "launched"
+      ]
+    },
+    {
+      "id": "venture_debt",
+      "label": "Venture debt",
+      "aliases": [
+        "Venture Debt"
+      ],
+      "typicalIdeaStages": [
+        "launched"
+      ]
+    }
+  ],
+  "skills": [
+    {
+      "id": "engineering",
+      "label": "Engineering",
+      "aliases": [
+        "Software",
+        "Development"
+      ]
+    },
+    {
+      "id": "product",
+      "label": "Product",
+      "aliases": []
+    },
+    {
+      "id": "design",
+      "label": "Design",
+      "aliases": [
+        "UI/UX",
+        "UX"
+      ]
+    },
+    {
+      "id": "ai_ml",
+      "label": "AI / ML",
+      "aliases": [
+        "AI/ML",
+        "Machine Learning"
+      ]
+    },
+    {
+      "id": "marketing",
+      "label": "Marketing",
+      "aliases": [
+        "Growth"
+      ]
+    },
+    {
+      "id": "sales",
+      "label": "Sales",
+      "aliases": [
+        "Business Development",
+        "BD"
+      ]
+    },
+    {
+      "id": "operations",
+      "label": "Operations",
+      "aliases": [
+        "Ops"
+      ]
+    },
+    {
+      "id": "finance",
+      "label": "Finance",
+      "aliases": []
+    },
+    {
+      "id": "research",
+      "label": "Research",
+      "aliases": []
+    },
+    {
+      "id": "domain_expert",
+      "label": "Domain expertise",
+      "aliases": [
+        "Domain Expert"
+      ]
+    }
+  ],
+  "roles": [
+    {
+      "id": "cofounder",
+      "label": "Co-founder",
+      "aliases": [
+        "Cofounder",
+        "Co founder"
+      ]
+    },
+    {
+      "id": "cto",
+      "label": "CTO",
+      "aliases": []
+    },
+    {
+      "id": "frontend",
+      "label": "Frontend developer",
+      "aliases": [
+        "Frontend Developer"
+      ]
+    },
+    {
+      "id": "backend",
+      "label": "Backend developer",
+      "aliases": [
+        "Backend Developer"
+      ]
+    },
+    {
+      "id": "fullstack",
+      "label": "Full-stack developer",
+      "aliases": [
+        "Full-stack Developer",
+        "Fullstack Developer"
+      ]
+    },
+    {
+      "id": "designer",
+      "label": "UI/UX designer",
+      "aliases": [
+        "UI/UX Designer",
+        "Designer"
+      ]
+    },
+    {
+      "id": "pm",
+      "label": "Product manager",
+      "aliases": [
+        "Product Manager"
+      ]
+    },
+    {
+      "id": "marketing",
+      "label": "Marketing lead",
+      "aliases": [
+        "Marketing Lead"
+      ]
+    },
+    {
+      "id": "ml_engineer",
+      "label": "ML engineer",
+      "aliases": [
+        "ML Engineer"
+      ]
+    },
+    {
+      "id": "community",
+      "label": "Community manager",
+      "aliases": [
+        "Community Manager"
+      ]
+    }
+  ],
+  "experienceLevels": [
+    {
+      "id": "junior",
+      "label": "Early career",
+      "aliases": [
+        "Junior"
+      ]
+    },
+    {
+      "id": "mid",
+      "label": "Mid-level",
+      "aliases": [
+        "Mid"
+      ]
+    },
+    {
+      "id": "senior",
+      "label": "Senior",
+      "aliases": []
+    },
+    {
+      "id": "founder",
+      "label": "Founded before",
+      "aliases": [
+        "Founder",
+        "Serial founder"
+      ]
+    },
+    {
+      "id": "executive",
+      "label": "Executive",
+      "aliases": [
+        "Exec"
+      ]
+    }
+  ],
+  "occupations": [
+    {
+      "id": "software_engineer",
+      "label": "Software engineer",
+      "aliases": [
+        "Engineer"
+      ]
+    },
+    {
+      "id": "product_manager",
+      "label": "Product manager",
+      "aliases": []
+    },
+    {
+      "id": "designer",
+      "label": "Designer",
+      "aliases": []
+    },
+    {
+      "id": "business_owner",
+      "label": "Business owner",
+      "aliases": []
+    },
+    {
+      "id": "student",
+      "label": "Student",
+      "aliases": []
+    },
+    {
+      "id": "other",
+      "label": "Other",
+      "aliases": []
+    }
+  ],
+  "checkSizes": [
+    {
+      "id": "lt_10k",
+      "label": "Under $10k",
+      "min": 1000,
+      "max": 10000,
+      "aliases": []
+    },
+    {
+      "id": "10k_25k",
+      "label": "$10k – $25k",
+      "min": 10000,
+      "max": 25000,
+      "aliases": []
+    },
+    {
+      "id": "25k_100k",
+      "label": "$25k – $100k",
+      "min": 25000,
+      "max": 100000,
+      "aliases": []
+    },
+    {
+      "id": "100k_500k",
+      "label": "$100k – $500k",
+      "min": 100000,
+      "max": 500000,
+      "aliases": []
+    },
+    {
+      "id": "500k_plus",
+      "label": "$500k+",
+      "min": 500000,
+      "max": 5000000,
+      "aliases": []
+    }
+  ],
+  "paceBuckets": [
+    {
+      "id": "1",
+      "label": "About 1 a quarter",
+      "value": 1,
+      "aliases": []
+    },
+    {
+      "id": "3",
+      "label": "2–4 a quarter",
+      "value": 3,
+      "aliases": []
+    },
+    {
+      "id": "6",
+      "label": "5–8 a quarter",
+      "value": 6,
+      "aliases": []
+    },
+    {
+      "id": "10",
+      "label": "More than 8",
+      "value": 10,
+      "aliases": []
+    }
+  ],
+  "vehicles": [
+    {
+      "id": "direct",
+      "label": "Direct / fund",
+      "aliases": [
+        "Direct Fund"
+      ]
+    },
+    {
+      "id": "spv",
+      "label": "SPV",
+      "aliases": []
+    },
+    {
+      "id": "syndicate",
+      "label": "Syndicate",
+      "aliases": []
+    },
+    {
+      "id": "venture_debt",
+      "label": "Venture debt",
+      "aliases": [
+        "Venture Debt"
+      ]
+    }
+  ],
+  "superpowers": [
+    {
+      "id": "recruiting",
+      "label": "Technical recruiting",
+      "aliases": [
+        "Technical Recruitment"
+      ]
+    },
+    {
+      "id": "enterprise_sales",
+      "label": "Enterprise sales intros",
+      "aliases": [
+        "Enterprise Sales Intros"
+      ]
+    },
+    {
+      "id": "regulatory",
+      "label": "Regulatory guidance",
+      "aliases": [
+        "SEC/Regulatory Guidance"
+      ]
+    },
+    {
+      "id": "growth",
+      "label": "Dev rel & growth",
+      "aliases": [
+        "Dev Rel & Growth"
+      ]
+    },
+    {
+      "id": "pr",
+      "label": "PR & communications",
+      "aliases": [
+        "PR & Communications"
+      ]
+    },
+    {
+      "id": "follow_on",
+      "label": "Follow-on syndication",
+      "aliases": [
+        "Follow-on Syndication"
+      ]
+    }
+  ],
+  "legalStructures": [
+    {
+      "id": "in_pvt_ltd",
+      "label": "India Pvt Ltd",
+      "aliases": [
+        "Private Limited",
+        "Pvt Ltd"
+      ]
+    },
+    {
+      "id": "in_llp",
+      "label": "India LLP",
+      "aliases": [
+        "LLP"
+      ]
+    },
+    {
+      "id": "us_c_corp",
+      "label": "US Delaware C-Corp",
+      "aliases": [
+        "Delaware C-Corp",
+        "C-Corp"
+      ]
+    },
+    {
+      "id": "sg_pte",
+      "label": "Singapore Pte Ltd",
+      "aliases": [
+        "Singapore PTE LTD"
+      ]
+    },
+    {
+      "id": "uk_ltd",
+      "label": "UK Limited",
+      "aliases": []
+    },
+    {
+      "id": "de_gmbh",
+      "label": "German GmbH",
+      "aliases": []
+    },
+    {
+      "id": "ee_entity",
+      "label": "Estonian entity",
+      "aliases": [
+        "Estonian Entity"
+      ]
+    },
+    {
+      "id": "cayman_foundation",
+      "label": "Cayman Foundation",
+      "aliases": []
+    }
+  ],
+  "locations": [
+    {
+      "id": "remote",
+      "label": "Remote",
+      "aliases": []
+    },
+    {
+      "id": "bengaluru",
+      "label": "Bengaluru",
+      "aliases": [
+        "Bangalore"
+      ]
+    },
+    {
+      "id": "delhi_ncr",
+      "label": "Delhi NCR",
+      "aliases": [
+        "Delhi",
+        "Gurgaon",
+        "Gurugram",
+        "Noida"
+      ]
+    },
+    {
+      "id": "mumbai",
+      "label": "Mumbai",
+      "aliases": []
+    },
+    {
+      "id": "hyderabad",
+      "label": "Hyderabad",
+      "aliases": []
+    },
+    {
+      "id": "pune",
+      "label": "Pune",
+      "aliases": []
+    },
+    {
+      "id": "sf_bay",
+      "label": "SF Bay Area",
+      "aliases": [
+        "SF Bay",
+        "San Francisco"
+      ]
+    },
+    {
+      "id": "nyc",
+      "label": "New York",
+      "aliases": [
+        "NYC"
+      ]
+    },
+    {
+      "id": "london",
+      "label": "London",
+      "aliases": []
+    },
+    {
+      "id": "berlin",
+      "label": "Berlin",
+      "aliases": []
+    },
+    {
+      "id": "singapore",
+      "label": "Singapore",
+      "aliases": []
+    }
+  ],
+  "raisingBands": [
+    {
+      "id": "not_raising",
+      "label": "Not raising",
+      "aliases": [
+        "None",
+        "No"
+      ]
+    },
+    {
+      "id": "lt_25k",
+      "label": "Under $25k",
+      "min": 1,
+      "max": 25000,
+      "aliases": []
+    },
+    {
+      "id": "25k_100k",
+      "label": "$25k – $100k",
+      "min": 25000,
+      "max": 100000,
+      "aliases": []
+    },
+    {
+      "id": "100k_500k",
+      "label": "$100k – $500k",
+      "min": 100000,
+      "max": 500000,
+      "aliases": []
+    },
+    {
+      "id": "500k_plus",
+      "label": "$500k+",
+      "min": 500000,
+      "aliases": []
+    }
+  ]
+}
