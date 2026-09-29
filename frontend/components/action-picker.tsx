@@ -30,22 +30,6 @@ const OPTIONS: Option[] = [
     accent: "#34D399",
     icon: "◉",
   },
-  {
-    id: "demo-investor",
-    label: "Investor view",
-    sub: "See the platform as an investor — with mock data",
-    href: "/investor",
-    accent: "#F472B6",
-    icon: "◎",
-  },
-  {
-    id: "demo-founder",
-    label: "Founder view",
-    sub: "See the platform as a founder — with mock data",
-    href: "/founder",
-    accent: "#818CF8",
-    icon: "◐",
-  },
 ]
 
 export function ActionPicker({

@@ -2,11 +2,6 @@
 
 import type React from "react"
 import { useState, useEffect } from "react"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Textarea } from "@/components/ui/textarea"
-import { Badge } from "@/components/ui/badge"
-import { Label } from "@/components/ui/label"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription } from "@/components/ui/dialog"
 
 import {
@@ -19,10 +14,15 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
-import { Plus, X, Trash2, Lightbulb, Cpu, Rocket, Globe, Check, Paperclip, Film, Volume2, FileText, Presentation } from "lucide-react"
+import { ChevronDown } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { toast } from "@/components/ui/use-toast"
+import { normalize, options } from "@/lib/taxonomy"
+import { IdeaPrivacyNote } from "@/components/idea-privacy-note"
 
 type Stage = "concept" | "prototype" | "mvp" | "launched"
+// "" = not set yet: only title and description are required to post.
+type StageValue = Stage | ""
 
 export interface Attachment {
   name: string
@@ -35,8 +35,9 @@ export interface Attachment {
 interface IdeaFormData {
   title: string
   description: string
-  stage: Stage
+  stage: StageValue
   lookingFor: string[]
+  raising: string
   tags: string[]
   isDraft: boolean
   attachments?: Attachment[]
@@ -47,8 +48,9 @@ interface Idea {
   title: string
   description?: string
   desc?: string
-  stage: Stage
+  stage?: StageValue
   lookingFor?: string[]
+  raising?: string
   tags: string[]
   isDraft?: boolean
   attachments?: Attachment[]
@@ -58,79 +60,32 @@ interface PostIdeaModalProps {
   trigger?: React.ReactNode
   isOpen?: boolean
   onClose?: () => void
-  onSubmit: (data: IdeaFormData) => void
-  onDelete?: () => void
+  /** Rejects with a user-facing message on failure; the modal then stays open with the text kept. */
+  onSubmit: (data: IdeaFormData) => Promise<void> | void
+  onDelete?: () => Promise<void> | void
   editingIdea?: Idea | null
+  /** Prefills the description of a new idea (from the founder home's box). */
+  initialDescription?: string
 }
 
-const STAGE_CARDS: { value: Stage; label: string; description: string; icon: React.ComponentType<{ className?: string }>; color: string; ringColor: string; bgActive: string; textColor: string }[] = [
-  {
-    value: "concept",
-    label: "Concept",
-    description: "Validate specs & draft theory",
-    icon: Lightbulb,
-    color: "border-blue-500/30 text-blue-400",
-    ringColor: "focus-within:ring-blue-500/20 active:border-blue-500/50",
-    bgActive: "bg-blue-500/10 border-blue-500/40 shadow-[0_0_15px_rgba(59,130,246,0.15)]",
-    textColor: "text-blue-400",
-  },
-  {
-    value: "prototype",
-    label: "Prototype",
-    description: "Initial functional alpha build",
-    icon: Cpu,
-    color: "border-amber-500/30 text-amber-400",
-    ringColor: "focus-within:ring-amber-500/20 active:border-amber-500/50",
-    bgActive: "bg-amber-500/10 border-amber-500/40 shadow-[0_0_15px_rgba(245,158,11,0.15)]",
-    textColor: "text-amber-400",
-  },
-  {
-    value: "mvp",
-    label: "MVP",
-    description: "Core features live & usable",
-    icon: Rocket,
-    color: "border-pink-500/30 text-pink-400",
-    ringColor: "focus-within:ring-pink-500/20 active:border-pink-500/50",
-    bgActive: "bg-pink-500/10 border-pink-500/40 shadow-[0_0_15px_rgba(236,72,153,0.15)]",
-    textColor: "text-pink-400",
-  },
-  {
-    value: "launched",
-    label: "Launched",
-    description: "Production release deployed",
-    icon: Globe,
-    color: "border-emerald-500/30 text-emerald-400",
-    ringColor: "focus-within:ring-emerald-500/20 active:border-emerald-500/50",
-    bgActive: "bg-emerald-500/10 border-emerald-500/40 shadow-[0_0_15px_rgba(16,185,129,0.15)]",
-    textColor: "text-emerald-400",
-  },
-]
+// Stages, sectors and roles come from shared/taxonomy.json; ids are stored, labels are shown.
+const STAGES = options("ideaStages")
+const RAISING = options("raisingBands")
 
-const SUGGESTED_ROLES = [
-  "Co-founder",
-  "CTO",
-  "Frontend Developer",
-  "Backend Developer",
-  "Full-stack Developer",
-  "UI/UX Designer",
-  "Product Manager",
-  "Marketing Lead",
-  "ML Engineer",
-  "Community Manager",
-]
+// Suggestions come from shared/taxonomy.json; ids are stored, labels are shown.
+const SUGGESTED_ROLES = options("roles")
+const SUGGESTED_TAGS = options("sectors")
 
-const SUGGESTED_TAGS = [
-  "AI/ML",
-  "Web3",
-  "Blockchain",
-  "DeFi",
-  "FinTech",
-  "HealthTech",
-  "SaaS",
-  "Mobile App",
-  "Developer Tools",
-  "Open Source",
-]
+const EMPTY_FORM: IdeaFormData = {
+  title: "",
+  description: "",
+  stage: "",
+  lookingFor: [],
+  raising: "",
+  tags: [],
+  isDraft: false,
+  attachments: [],
+}
 
 export function PostIdeaModal({
   trigger,
@@ -139,20 +94,16 @@ export function PostIdeaModal({
   onSubmit,
   onDelete,
   editingIdea,
+  initialDescription = "",
 }: PostIdeaModalProps) {
   const [internalOpen, setInternalOpen] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
-  const [formData, setFormData] = useState<IdeaFormData>({
-    title: "",
-    description: "",
-    stage: "concept",
-    lookingFor: [],
-    tags: [],
-    isDraft: false,
-    attachments: [],
-  })
+  const [formData, setFormData] = useState<IdeaFormData>(EMPTY_FORM)
+  const [showDetails, setShowDetails] = useState(false)
   const [newRole, setNewRole] = useState("")
   const [newTag, setNewTag] = useState("")
+  const [saving, setSaving] = useState(false)
+  const [submitError, setSubmitError] = useState<string | null>(null)
 
   const isOpen = controlledOpen !== undefined ? controlledOpen : internalOpen
   const isEditing = !!editingIdea
@@ -162,24 +113,21 @@ export function PostIdeaModal({
       setFormData({
         title: editingIdea.title || "",
         description: editingIdea.description || editingIdea.desc || "",
-        stage: editingIdea.stage || "concept",
+        stage: editingIdea.stage || "",
         lookingFor: editingIdea.lookingFor || [],
+        raising: editingIdea.raising || "",
         tags: editingIdea.tags || [],
         isDraft: editingIdea.isDraft || false,
         attachments: editingIdea.attachments || [],
       })
+      // Show the optional details when editing an idea that already has some.
+      setShowDetails(Boolean(editingIdea.stage || editingIdea.raising || editingIdea.tags?.length || editingIdea.lookingFor?.length || editingIdea.attachments?.length))
     } else {
-      setFormData({
-        title: "",
-        description: "",
-        stage: "concept",
-        lookingFor: [],
-        tags: [],
-        isDraft: false,
-        attachments: [],
-      })
+      setFormData({ ...EMPTY_FORM, description: initialDescription })
+      setShowDetails(false)
     }
-  }, [editingIdea, isOpen])
+    setSubmitError(null)
+  }, [editingIdea, isOpen, initialDescription])
 
   const handleOpenChange = (open: boolean): void => {
     if (controlledOpen !== undefined) {
@@ -189,48 +137,29 @@ export function PostIdeaModal({
     }
   }
 
-  const handleFileUpload = (
-    type: "presentation" | "video" | "audio" | "document",
-    files: FileList | null
-  ) => {
+  const kindOf = (file: File): Attachment["type"] => {
+    const ext = file.name.toLowerCase().split(".").pop() ?? ""
+    if (["ppt", "pptx", "key"].includes(ext)) return "presentation"
+    if (["mp4", "mov", "webm"].includes(ext) || file.type.startsWith("video/")) return "video"
+    if (["mp3", "wav", "m4a"].includes(ext) || file.type.startsWith("audio/")) return "audio"
+    return "document"
+  }
+
+  const sizeLabel = (bytes: number) =>
+    bytes > 1024 * 1024 ? `${(bytes / (1024 * 1024)).toFixed(1)} MB` : bytes > 1024 ? `${(bytes / 1024).toFixed(0)} KB` : `${bytes} B`
+
+  const addFiles = (files: FileList | null) => {
     if (!files) return
-    const fileList = Array.from(files)
-    
-    // Block ZIP files
-    const hasZip = fileList.some(
-      (file) =>
-        file.name.toLowerCase().endsWith(".zip") ||
-        file.type === "application/zip" ||
-        file.type === "application/x-zip-compressed"
-    )
-    if (hasZip) {
-      alert("ZIP files are not allowed for pitch materials.")
+    const list = Array.from(files)
+    const isZip = (f: File) => f.name.toLowerCase().endsWith(".zip") || f.type === "application/zip" || f.type === "application/x-zip-compressed"
+    if (list.some(isZip)) {
+      toast({ title: "ZIP files aren't allowed", description: "Attach the slides, video or document itself.", variant: "destructive" })
       return
     }
-
-    const newAttachments = [...(formData.attachments || [])]
-
-    fileList.forEach((file) => {
-      let sizeStr = "0 KB"
-      if (file.size > 1024 * 1024) {
-        sizeStr = `${(file.size / (1024 * 1024)).toFixed(1)} MB`
-      } else if (file.size > 1024) {
-        sizeStr = `${(file.size / 1024).toFixed(0)} KB`
-      } else {
-        sizeStr = `${file.size} B`
-      }
-
-      newAttachments.push({
-        name: file.name,
-        size: sizeStr,
-        type,
-        file, // keep the File object so the parent can upload it
-      })
-    })
-
     setFormData((prev) => ({
       ...prev,
-      attachments: newAttachments,
+      // keep the File object so the parent can upload it after the idea is saved
+      attachments: [...(prev.attachments || []), ...list.map((file) => ({ name: file.name, size: sizeLabel(file.size), type: kindOf(file), file }))],
     }))
   }
 
@@ -241,38 +170,39 @@ export function PostIdeaModal({
     }))
   }
 
-  const handleSubmit = (isDraft: boolean): void => {
-    if (!formData.title.trim() || !formData.description.trim()) return
-
-    onSubmit({
-      ...formData,
-      isDraft,
-    })
-
-    // Reset form
-    setFormData({
-      title: "",
-      description: "",
-      stage: "concept",
-      lookingFor: [],
-      tags: [],
-      isDraft: false,
-      attachments: [],
-    })
-
-    handleOpenChange(false)
+  // Clear and close only after the save succeeds; on failure the founder's text stays put.
+  const handleSubmit = async (isDraft: boolean) => {
+    if (!formData.title.trim() || !formData.description.trim() || saving) return
+    setSaving(true)
+    setSubmitError(null)
+    try {
+      await onSubmit({ ...formData, isDraft })
+      setFormData(EMPTY_FORM)
+      handleOpenChange(false)
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : "Not saved. Please try again.")
+    } finally {
+      setSaving(false)
+    }
   }
 
-  const handleDelete = (): void => {
-    if (editingIdea && onDelete) {
-      onDelete()
-      setShowDeleteDialog(false)
+  const handleDelete = async () => {
+    if (!editingIdea || !onDelete || saving) return
+    setShowDeleteDialog(false)
+    setSaving(true)
+    setSubmitError(null)
+    try {
+      await onDelete()
       handleOpenChange(false)
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : "Not deleted. Please try again.")
+    } finally {
+      setSaving(false)
     }
   }
 
   const toggleRole = (role: string): void => {
-    const trimmed = role.trim()
+    const trimmed = normalize("roles", role)
     if (!trimmed) return
     
     if (formData.lookingFor.includes(trimmed)) {
@@ -289,7 +219,7 @@ export function PostIdeaModal({
   }
 
   const toggleTag = (tag: string): void => {
-    const trimmed = tag.trim()
+    const trimmed = normalize("sectors", tag)
     if (!trimmed) return
 
     if (formData.tags.includes(trimmed)) {
@@ -312,483 +242,232 @@ export function PostIdeaModal({
     }
   }
 
-  // Calculate completeness progress
-  const getProgress = (): number => {
-    let score = 0
-    if (formData.title.trim().length >= 3) score += 30
-    if (formData.description.trim().length >= 10) score += 30
-    if (formData.stage) score += 20
-    if (formData.lookingFor.length > 0) score += 10
-    if (formData.tags.length > 0) score += 10
-    return score
-  }
-
-  const progressPercent = getProgress()
+  const canSave = Boolean(formData.title.trim() && formData.description.trim()) && !saving
+  const chip = (on: boolean) =>
+    cn(
+      "rounded-full border px-3.5 py-1.5 text-sm transition-colors cursor-pointer",
+      on ? "border-foreground bg-foreground text-background" : "border-input text-muted-foreground hover:text-foreground",
+    )
+  const field = "w-full rounded-lg border border-input bg-transparent px-3.5 text-base text-foreground placeholder:text-muted-foreground focus:border-muted-foreground focus:outline-none"
+  const customSectors = formData.tags.filter((t) => !SUGGESTED_TAGS.some((o) => o.value === t))
+  const customRoles = formData.lookingFor.filter((r) => !SUGGESTED_ROLES.some((o) => o.value === r))
 
   return (
     <>
       <Dialog open={isOpen} onOpenChange={handleOpenChange}>
         {trigger && <DialogTrigger asChild>{trigger}</DialogTrigger>}
-        {!trigger && controlledOpen === undefined && (
-          <DialogTrigger asChild>
-            <Button className="bg-white text-black hover:bg-[#34D399] rounded-full text-xs font-semibold px-5 transition-all">
-              <Plus className="mr-1.5 h-4 w-4" />
-              Post new idea
-            </Button>
-          </DialogTrigger>
-        )}
-        <DialogContent className="bg-popover/95 backdrop-blur-2xl border border-border/40 text-popover-foreground rounded-2xl sm:max-w-3xl shadow-2xl p-0 overflow-hidden max-h-[92vh] flex flex-col">
-          
-          {/* Top Form Progress Bar */}
-          <div className="w-full h-[3px] bg-foreground/[0.03]">
-            <div 
-              className="h-full bg-gradient-to-r from-teal-500 via-[#34D399] to-emerald-400 transition-all duration-500 ease-out"
-              style={{ width: `${progressPercent}%` }}
-            />
-          </div>
-
-          {/* Fixed Header */}
-          <DialogHeader className="p-6 pb-4 border-b border-border/10 shrink-0">
-            <div className="flex items-start justify-between">
-              <div className="space-y-1">
-                <DialogTitle className="text-xl font-serif font-light text-foreground flex items-center gap-2">
-                  <Lightbulb className="h-5 w-5 text-amber-500" />
-                  {isEditing ? "Edit Project Idea" : "Post New Project Idea"}
-                </DialogTitle>
-                <DialogDescription className="text-muted-foreground text-xs mt-1 leading-relaxed">
-                  {isEditing 
-                    ? "Update your concept specifications and builder needs to matches updates."
-                    : "Submit your concept details to recruit co-builders and get cohort feedback."
-                  }
-                </DialogDescription>
-              </div>
-              {isEditing && onDelete && (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => setShowDeleteDialog(true)}
-                  className="text-rose-500 hover:text-rose-600 hover:bg-rose-500/10 rounded-full h-8 w-8 shrink-0 mr-6"
-                  title="Delete Idea"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-              )}
-            </div>
+        <DialogContent className="flex max-h-[90vh] flex-col gap-0 overflow-hidden rounded-2xl border-border bg-popover p-0 text-popover-foreground sm:max-w-[640px]">
+          <DialogHeader className="px-8 pt-8 text-left">
+            <DialogTitle className="text-2xl font-medium">{isEditing ? "Edit idea" : "New idea"}</DialogTitle>
+            <DialogDescription className="text-[15px] text-muted-foreground">
+              A title and a few sentences are enough. Everything else is optional.
+            </DialogDescription>
           </DialogHeader>
 
-          {/* Scrollable Container */}
-          <div className="flex-1 overflow-y-auto p-6 pr-4 space-y-6 max-h-[60vh] [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-thumb]:bg-foreground/10 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-track]:bg-transparent">
-            
-            {/* Title & Description Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-              {/* Title Field */}
-              <div className="space-y-1.5">
-                <div className="flex justify-between items-center">
-                  <Label htmlFor="title" className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider font-mono">Title *</Label>
-                  <span className="text-[11px] font-mono text-muted-foreground/50">{formData.title.length}/50</span>
-                </div>
-                <Input
-                  id="title"
-                  maxLength={50}
-                  placeholder="Name your creation..."
-                  value={formData.title}
-                  onChange={(e) => setFormData((prev) => ({ ...prev, title: e.target.value }))}
-                  className={cn(
-                    "bg-accent/20 border-border/40 text-foreground placeholder:text-foreground/30 rounded-lg text-xs h-9 transition-all duration-300",
-                    formData.title.trim().length >= 3 
-                      ? "focus-visible:ring-emerald-500/20 focus-visible:border-emerald-500/30 border-emerald-500/10 shadow-[0_0_10px_rgba(16,185,129,0.03)]" 
-                      : "focus-visible:ring-foreground/10 focus-visible:border-border/20"
-                  )}
-                  required
-                />
-              </div>
-
-              {/* Description Field */}
-              <div className="space-y-1.5">
-                <div className="flex justify-between items-center">
-                  <Label htmlFor="description" className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider font-mono">Description *</Label>
-                  <span className="text-[11px] font-mono text-muted-foreground/50">{formData.description.length}/500</span>
-                </div>
-                <Textarea
-                  id="description"
-                  maxLength={500}
-                  placeholder="Describe your idea, what problem it solves, and why builders should join..."
-                  value={formData.description}
-                  onChange={(e) => setFormData((prev) => ({ ...prev, description: e.target.value }))}
-                  className={cn(
-                    "min-h-[80px] md:min-h-[90px] bg-accent/20 border-border/40 text-foreground placeholder:text-foreground/30 rounded-lg text-xs leading-relaxed transition-all duration-300",
-                    formData.description.trim().length >= 10 
-                      ? "focus-visible:ring-emerald-500/20 focus-visible:border-emerald-500/30 border-emerald-500/10 shadow-[0_0_10px_rgba(16,185,129,0.03)]" 
-                      : "focus-visible:ring-foreground/10 focus-visible:border-border/20"
-                  )}
-                  required
-                />
-              </div>
-            </div>
-
-            {/* Current Stage Selection Grid */}
+          <div className="flex-1 space-y-7 overflow-y-auto px-8 py-7">
             <div className="space-y-2">
-              <Label className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider font-mono">Current Stage *</Label>
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                {STAGE_CARDS.map((option) => {
-                  const selected = formData.stage === option.value
-                  const CardIcon = option.icon
-                  return (
-                    <button
-                      type="button"
-                      key={option.value}
-                      onClick={() => setFormData((prev) => ({ ...prev, stage: option.value }))}
-                      className={cn(
-                        "flex flex-col items-start p-4 rounded-xl border text-left transition-all duration-300 group cursor-pointer w-full",
-                        selected
-                          ? option.bgActive
-                          : "bg-accent/10 border-border/40 hover:bg-accent/20 hover:border-border/60"
-                      )}
-                    >
-                      <div className="flex items-center justify-between w-full mb-1">
-                        <div className={cn(
-                          "p-2 rounded-lg bg-accent/30 border border-border/20 transition-all group-hover:scale-105",
-                          selected ? option.textColor + " bg-accent/50" : "text-muted-foreground"
-                        )}>
-                          <CardIcon className="h-4 w-4" />
-                        </div>
-                        {selected && (
-                          <div className={cn("p-0.5 rounded-full bg-accent/20 border border-border/40", option.textColor)}>
-                            <Check className="h-3 w-3" />
-                          </div>
-                        )}
-                      </div>
-                      <span className={cn(
-                        "text-xs font-bold font-mono uppercase tracking-wider mt-2",
-                        selected ? "text-foreground" : "text-foreground/80"
-                      )}>
-                        {option.label}
-                      </span>
-                      <span className="text-[10px] text-muted-foreground mt-1 leading-snug font-sans">
-                        {option.description}
-                      </span>
-                    </button>
-                  )
-                })}
+              <div className="flex items-baseline justify-between">
+                <label htmlFor="title" className="text-[15px] text-foreground">Title</label>
+                <span className="text-xs text-muted-foreground tabular-nums">{formData.title.length}/50</span>
               </div>
+              <input
+                id="title"
+                maxLength={50}
+                placeholder="What should people call it?"
+                value={formData.title}
+                onChange={(e) => setFormData((prev) => ({ ...prev, title: e.target.value }))}
+                className={cn(field, "h-11")}
+              />
             </div>
 
-            {/* Roles Needed and Tags Side-by-Side Grid */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              
-              {/* Roles Needed Section */}
-              <div className="space-y-3">
-                <Label className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider font-mono block">Looking For (Roles Needed)</Label>
-                <div className="space-y-3">
-                  <div className="flex gap-2">
-                    <Input
-                      placeholder="Type custom role & press Add..."
-                      value={newRole}
-                      onChange={(e) => setNewRole(e.target.value)}
-                      onKeyDown={(e) => handleKeyPress(e, () => {
-                        if (newRole.trim()) {
-                           toggleRole(newRole)
-                           setNewRole("")
-                        }
-                      })}
-                      className="bg-accent/20 border-border/40 text-foreground placeholder:text-foreground/30 rounded-lg text-xs h-9 flex-1 focus-visible:ring-foreground/10 focus-visible:border-border/25"
+            <div className="space-y-2">
+              <div className="flex items-baseline justify-between">
+                <label htmlFor="description" className="text-[15px] text-foreground">Description</label>
+                <span className="text-xs text-muted-foreground tabular-nums">{formData.description.length}/500</span>
+              </div>
+              <textarea
+                id="description"
+                maxLength={500}
+                rows={5}
+                placeholder="What problem does it solve, and for whom?"
+                value={formData.description}
+                onChange={(e) => setFormData((prev) => ({ ...prev, description: e.target.value }))}
+                className={cn(field, "resize-none py-3 leading-relaxed")}
+              />
+              <IdeaPrivacyNote />
+            </div>
+
+            {/* Everything below is optional; the Something box asks for missing details later. */}
+            <button
+              type="button"
+              onClick={() => setShowDetails((v) => !v)}
+              aria-expanded={showDetails}
+              className="flex items-center gap-2 text-[15px] text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+            >
+              <ChevronDown className={cn("h-4 w-4 transition-transform", showDetails && "rotate-180")} />
+              Add stage, raising, sectors, roles or files
+            </button>
+
+            {showDetails && (
+              <div className="space-y-8">
+                <fieldset className="space-y-3">
+                  <legend className="text-[15px] text-foreground">Stage</legend>
+                  <div className="flex flex-wrap gap-2 pt-3">
+                    {STAGES.map((st) => (
+                      <button
+                        key={st.value}
+                        type="button"
+                        aria-pressed={formData.stage === st.value}
+                        onClick={() => setFormData((prev) => ({ ...prev, stage: prev.stage === st.value ? "" : (st.value as Stage) }))}
+                        className={chip(formData.stage === st.value)}
+                      >
+                        {st.label}
+                      </button>
+                    ))}
+                  </div>
+                </fieldset>
+
+                <fieldset className="space-y-3">
+                  <legend className="text-[15px] text-foreground">Raising</legend>
+                  <div className="flex flex-wrap gap-2 pt-3">
+                    {RAISING.map((r) => (
+                      <button
+                        key={r.value}
+                        type="button"
+                        aria-pressed={formData.raising === r.value}
+                        onClick={() => setFormData((prev) => ({ ...prev, raising: prev.raising === r.value ? "" : r.value }))}
+                        className={chip(formData.raising === r.value)}
+                      >
+                        {r.label}
+                      </button>
+                    ))}
+                  </div>
+                </fieldset>
+
+                <fieldset className="space-y-3">
+                  <legend className="text-[15px] text-foreground">Sectors</legend>
+                  <div className="flex flex-wrap gap-2 pt-3">
+                    {SUGGESTED_TAGS.map((t) => (
+                      <button key={t.value} type="button" aria-pressed={formData.tags.includes(t.value)} onClick={() => toggleTag(t.value)} className={chip(formData.tags.includes(t.value))}>
+                        {t.label}
+                      </button>
+                    ))}
+                    {customSectors.map((t) => (
+                      <button key={t} type="button" aria-pressed onClick={() => toggleTag(t)} className={chip(true)} aria-label={`Remove ${t}`}>
+                        {t} ×
+                      </button>
+                    ))}
+                  </div>
+                  <input
+                    value={newTag}
+                    onChange={(e) => setNewTag(e.target.value)}
+                    onKeyDown={(e) => handleKeyPress(e, () => { toggleTag(newTag); setNewTag("") })}
+                    placeholder="Another sector? Type it and press Enter"
+                    className={cn(field, "h-10 text-[15px]")}
+                  />
+                </fieldset>
+
+                <fieldset className="space-y-3">
+                  <legend className="text-[15px] text-foreground">Looking for</legend>
+                  <div className="flex flex-wrap gap-2 pt-3">
+                    {SUGGESTED_ROLES.map((r) => (
+                      <button key={r.value} type="button" aria-pressed={formData.lookingFor.includes(r.value)} onClick={() => toggleRole(r.value)} className={chip(formData.lookingFor.includes(r.value))}>
+                        {r.label}
+                      </button>
+                    ))}
+                    {customRoles.map((r) => (
+                      <button key={r} type="button" aria-pressed onClick={() => toggleRole(r)} className={chip(true)} aria-label={`Remove ${r}`}>
+                        {r} ×
+                      </button>
+                    ))}
+                  </div>
+                  <input
+                    value={newRole}
+                    onChange={(e) => setNewRole(e.target.value)}
+                    onKeyDown={(e) => handleKeyPress(e, () => { toggleRole(newRole); setNewRole("") })}
+                    placeholder="Another role? Type it and press Enter"
+                    className={cn(field, "h-10 text-[15px]")}
+                  />
+                </fieldset>
+
+                <fieldset className="space-y-3">
+                  <legend className="text-[15px] text-foreground">Files</legend>
+                  <p className="pt-2 text-sm text-muted-foreground">A deck, a demo video, a voice note or a one-pager. Not ZIP files.</p>
+                  <label className="inline-flex h-10 cursor-pointer items-center rounded-full border border-input px-4 text-[15px] text-foreground hover:border-muted-foreground">
+                    Attach files
+                    <input
+                      type="file"
+                      multiple
+                      accept=".pdf,.ppt,.pptx,.key,.doc,.docx,.txt,.mp4,.mov,.webm,.mp3,.wav,.m4a,video/*,audio/*"
+                      className="sr-only"
+                      onChange={(e) => { addFiles(e.target.files); e.target.value = "" }}
                     />
-                    <Button
-                      type="button"
-                      onClick={() => {
-                        if (newRole.trim()) {
-                          toggleRole(newRole)
-                          setNewRole("")
-                        }
-                      }}
-                      disabled={!newRole.trim()}
-                      className="bg-primary text-primary-foreground hover:opacity-90 rounded-lg text-xs font-semibold px-3.5 h-9 transition-colors shrink-0 cursor-pointer"
-                    >
-                      Add
-                    </Button>
-                  </div>
-
-                  {/* Horizontal Roles suggestions */}
-                  <div className="space-y-1">
-                    <span className="text-[11px] font-mono text-muted-foreground/40 uppercase tracking-widest">Suggestions</span>
-                    <div className="flex flex-nowrap gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden py-0.5">
-                      {SUGGESTED_ROLES.map((role) => {
-                        const isSelected = formData.lookingFor.includes(role)
-                        return (
-                          <button
-                            type="button"
-                            key={role}
-                            onClick={() => toggleRole(role)}
-                            className={cn(
-                              "h-6 px-2.5 rounded border transition-all font-mono text-[11px] shrink-0 cursor-pointer flex items-center gap-1",
-                              isSelected 
-                                ? "bg-indigo-500/10 border-indigo-500/30 text-indigo-500 font-semibold"
-                                : "border-border/40 bg-accent/10 hover:border-border/60 hover:bg-accent/30 text-muted-foreground hover:text-foreground"
-                            )}
-                          >
-                            {isSelected ? <Check className="h-2.5 w-2.5" /> : "+"} {role}
-                          </button>
-                        )
-                      })}
-                    </div>
-                  </div>
-
-                  {/* Selected Roles container */}
-                  {formData.lookingFor.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5 pt-2 border-t border-border/10">
-                      {formData.lookingFor.map((role) => (
-                        <Badge key={role} className="bg-indigo-500/10 text-indigo-500 border border-indigo-500/20 text-[10px] font-mono py-0.5 px-2.5 rounded-full flex items-center gap-1.5">
-                           {role}
-                           <button
-                             type="button"
-                             onClick={() => toggleRole(role)}
-                             className="h-3 w-3 rounded-full hover:bg-foreground/10 inline-flex items-center justify-center cursor-pointer"
-                             aria-label={`Remove ${role}`}
-                           >
-                             <X className="h-2.5 w-2.5 text-indigo-500" />
-                           </button>
-                        </Badge>
+                  </label>
+                  {formData.attachments && formData.attachments.length > 0 && (
+                    <ul className="divide-y divide-border">
+                      {formData.attachments.map((file, idx) => (
+                        <li key={`${file.name}-${idx}`} className="flex items-baseline justify-between gap-4 py-3">
+                          <span className="min-w-0 truncate text-[15px]">{file.name}</span>
+                          <span className="flex shrink-0 items-baseline gap-4 text-xs text-muted-foreground">
+                            {file.size}
+                            <button type="button" onClick={() => removeAttachment(idx)} className="hover:text-foreground cursor-pointer">
+                              Remove
+                            </button>
+                          </span>
+                        </li>
                       ))}
-                    </div>
+                    </ul>
                   )}
-                </div>
+                </fieldset>
               </div>
+            )}
 
-              {/* Tags Section */}
-              <div className="space-y-3">
-                <Label className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider font-mono block">Tags</Label>
-                <div className="space-y-3">
-                  <div className="flex gap-2">
-                    <Input
-                      placeholder="Type custom tag & press Add..."
-                      value={newTag}
-                      onChange={(e) => setNewTag(e.target.value)}
-                      onKeyDown={(e) => handleKeyPress(e, () => {
-                        if (newTag.trim()) {
-                          toggleTag(newTag)
-                          setNewTag("")
-                        }
-                      })}
-                      className="bg-accent/20 border-border/40 text-foreground placeholder:text-foreground/30 rounded-lg text-xs h-9 flex-1 focus-visible:ring-foreground/10 focus-visible:border-border/25"
-                    />
-                    <Button
-                      type="button"
-                      onClick={() => {
-                        if (newTag.trim()) {
-                          toggleTag(newTag)
-                          setNewTag("")
-                        }
-                      }}
-                      disabled={!newTag.trim()}
-                      className="bg-primary text-primary-foreground hover:opacity-90 rounded-lg text-xs font-semibold px-3.5 h-9 transition-colors shrink-0 cursor-pointer"
-                    >
-                      Add
-                    </Button>
-                  </div>
-
-                  {/* Horizontal Tags suggestions */}
-                  <div className="space-y-1">
-                    <span className="text-[11px] font-mono text-muted-foreground/40 uppercase tracking-widest">Suggestions</span>
-                    <div className="flex flex-nowrap gap-1.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden py-0.5">
-                      {SUGGESTED_TAGS.map((tag) => {
-                        const isSelected = formData.tags.includes(tag)
-                        return (
-                          <button
-                            type="button"
-                            key={tag}
-                            onClick={() => toggleTag(tag)}
-                            className={cn(
-                              "h-6 px-2.5 rounded border transition-all font-mono text-[11px] shrink-0 cursor-pointer flex items-center gap-1",
-                              isSelected 
-                                ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-500 font-semibold"
-                                : "border-border/40 bg-accent/10 hover:border-border/60 hover:bg-accent/30 text-muted-foreground hover:text-foreground"
-                            )}
-                          >
-                            {isSelected ? <Check className="h-2.5 w-2.5" /> : "#"} {tag}
-                          </button>
-                        )
-                      })}
-                    </div>
-                  </div>
-
-                  {/* Selected Tags container */}
-                  {formData.tags.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5 pt-2 border-t border-border/10">
-                      {formData.tags.map((tag) => (
-                        <Badge key={tag} className="bg-accent text-foreground/80 border border-border/60 text-[10px] font-mono py-0.5 px-2.5 rounded-full flex items-center gap-1.5">
-                          #{tag}
-                          <button
-                            type="button"
-                            onClick={() => toggleTag(tag)}
-                            className="h-3 w-3 rounded-full hover:bg-foreground/10 inline-flex items-center justify-center cursor-pointer"
-                            aria-label={`Remove ${tag}`}
-                          >
-                            <X className="h-2.5 w-2.5 text-muted-foreground" />
-                          </button>
-                        </Badge>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            {/* Pitch & Supporting Materials Section */}
-            <div className="space-y-3 pt-4 border-t border-border/10">
-              <div className="flex items-center gap-2">
-                <Paperclip className="h-4 w-4 text-emerald-400" />
-                <Label className="text-[10px] text-muted-foreground font-semibold uppercase tracking-wider font-mono">Pitch Materials (No ZIP allowed)</Label>
-              </div>
-
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                {/* 1. Presentation Deck */}
-                <div className="relative border border-border/40 bg-accent/5 hover:bg-accent/10 rounded-xl p-3 flex flex-col items-center justify-center text-center transition-all min-h-[90px]">
-                  <input
-                    type="file"
-                    accept=".pdf,.ppt,.pptx"
-                    multiple
-                    className="absolute inset-0 opacity-0 cursor-pointer"
-                    onChange={(e) => handleFileUpload("presentation", e.target.files)}
-                  />
-                  <Presentation className="h-5 w-5 text-blue-400 mb-1.5" />
-                  <span className="text-[10px] font-bold text-foreground">Pitch Deck</span>
-                  <span className="text-[8px] text-muted-foreground mt-0.5 font-mono">PDF, PPT, PPTX</span>
-                </div>
-
-                {/* 2. Pitch Video */}
-                <div className="relative border border-border/40 bg-accent/5 hover:bg-accent/10 rounded-xl p-3 flex flex-col items-center justify-center text-center transition-all min-h-[90px]">
-                  <input
-                    type="file"
-                    accept=".mp4,.mov,.webm,video/*"
-                    multiple
-                    className="absolute inset-0 opacity-0 cursor-pointer"
-                    onChange={(e) => handleFileUpload("video", e.target.files)}
-                  />
-                  <Film className="h-5 w-5 text-purple-400 mb-1.5" />
-                  <span className="text-[10px] font-bold text-foreground">Pitch Video</span>
-                  <span className="text-[8px] text-muted-foreground mt-0.5 font-mono">MP4, MOV, WEBM</span>
-                </div>
-
-                {/* 3. Audio Pitch */}
-                <div className="relative border border-border/40 bg-accent/5 hover:bg-accent/10 rounded-xl p-3 flex flex-col items-center justify-center text-center transition-all min-h-[90px]">
-                  <input
-                    type="file"
-                    accept=".mp3,.wav,.m4a,audio/*"
-                    multiple
-                    className="absolute inset-0 opacity-0 cursor-pointer"
-                    onChange={(e) => handleFileUpload("audio", e.target.files)}
-                  />
-                  <Volume2 className="h-5 w-5 text-amber-400 mb-1.5" />
-                  <span className="text-[10px] font-bold text-foreground">Audio Pitch</span>
-                  <span className="text-[8px] text-muted-foreground mt-0.5 font-mono">MP3, WAV, M4A</span>
-                </div>
-
-                {/* 4. Supporting Document */}
-                <div className="relative border border-border/40 bg-accent/5 hover:bg-accent/10 rounded-xl p-3 flex flex-col items-center justify-center text-center transition-all min-h-[90px]">
-                  <input
-                    type="file"
-                    accept=".pdf,.doc,.docx,.txt"
-                    multiple
-                    className="absolute inset-0 opacity-0 cursor-pointer"
-                    onChange={(e) => handleFileUpload("document", e.target.files)}
-                  />
-                  <FileText className="h-5 w-5 text-rose-400 mb-1.5" />
-                  <span className="text-[10px] font-bold text-foreground">One-Pager / Doc</span>
-                  <span className="text-[8px] text-muted-foreground mt-0.5 font-mono">PDF, DOC, DOCX, TXT</span>
-                </div>
-              </div>
-
-              {/* Uploaded Pitches list */}
-              {formData.attachments && formData.attachments.length > 0 && (
-                <div className="space-y-2 pt-2">
-                  <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-widest block">Uploaded Materials ({formData.attachments.length})</span>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                    {formData.attachments.map((file, idx) => {
-                      const AttachmentIcon = {
-                        presentation: Presentation,
-                        video: Film,
-                        audio: Volume2,
-                        document: FileText,
-                      }[file.type] || Paperclip
-
-                      const colorClass = {
-                        presentation: "text-blue-400 border-blue-500/20 bg-blue-500/5",
-                        video: "text-purple-400 border-purple-500/20 bg-purple-500/5",
-                        audio: "text-amber-400 border-amber-500/20 bg-amber-500/5",
-                        document: "text-rose-400 border-rose-500/20 bg-rose-500/5",
-                      }[file.type] || "text-emerald-400 border-emerald-500/20 bg-emerald-500/5"
-
-                      return (
-                        <div key={idx} className={cn("flex items-center justify-between border rounded-lg px-3 py-2 text-xs", colorClass)}>
-                          <div className="flex items-center gap-2 min-w-0">
-                            <AttachmentIcon className="h-3.5 w-3.5 shrink-0" />
-                            <span className="truncate font-mono text-[11px] font-medium">{file.name}</span>
-                            <span className="text-[9px] opacity-60 font-mono">({file.size})</span>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => removeAttachment(idx)}
-                            className="p-1 rounded hover:bg-foreground/10 text-inherit cursor-pointer shrink-0"
-                            aria-label={`Remove ${file.name}`}
-                          >
-                            <X className="h-3 w-3" />
-                          </button>
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
-              )}
-            </div>
-
+            {submitError && (
+              <p role="alert" className="text-[15px] text-destructive">{submitError}</p>
+            )}
           </div>
 
-          {/* Fixed Actions Footer */}
-          <div className="flex gap-2.5 justify-end p-6 border-t border-border/10 bg-accent/10 shrink-0">
-            <Button
-              variant="outline"
-              type="button"
-              onClick={() => handleOpenChange(false)}
-              className="border-border/40 text-foreground/75 hover:bg-accent/50 text-xs font-semibold rounded-lg h-9 px-4 bg-transparent cursor-pointer"
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="outline"
-              type="button"
-              onClick={() => handleSubmit(true)}
-              disabled={!formData.title.trim() || !formData.description.trim()}
-              className="border-border/40 text-foreground/75 hover:bg-accent/50 text-xs font-semibold rounded-lg h-9 px-4 bg-transparent cursor-pointer"
-            >
-              Save as Draft
-            </Button>
-            <Button
-              type="button"
-              onClick={() => handleSubmit(false)}
-              disabled={!formData.title.trim() || !formData.description.trim()}
-              className="bg-primary text-primary-foreground hover:opacity-90 text-xs font-semibold h-9 px-5 rounded-lg transition-all cursor-pointer"
-            >
-              {isEditing ? "Save Changes" : "Post Idea"}
-            </Button>
+          <div className="flex items-center justify-between gap-4 border-t border-border px-8 py-5">
+            <div>
+              {isEditing && onDelete && (
+                <button type="button" onClick={() => setShowDeleteDialog(true)} disabled={saving} className="text-[15px] text-destructive hover:opacity-80 cursor-pointer">
+                  Delete idea
+                </button>
+              )}
+            </div>
+            <div className="flex items-center gap-5">
+              <button type="button" onClick={() => handleSubmit(true)} disabled={!canSave} className="text-[15px] text-muted-foreground hover:text-foreground disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer">
+                Save as draft
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSubmit(false)}
+                disabled={!canSave}
+                className="inline-flex h-10 shrink-0 items-center whitespace-nowrap rounded-full bg-foreground px-5 text-[15px] font-medium text-background hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+              >
+                {saving ? "Saving…" : isEditing ? "Save changes" : "Post idea"}
+              </button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>
 
-      {/* Delete Confirmation Dialog */}
       <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
-        <AlertDialogContent className="bg-popover border border-border/40 text-popover-foreground backdrop-blur-xl rounded-2xl p-6 shadow-2xl max-w-sm">
-          <AlertDialogHeader>
-            <AlertDialogTitle className="font-serif font-light text-base">Delete Idea</AlertDialogTitle>
-            <AlertDialogDescription className="text-muted-foreground text-xs leading-relaxed mt-1">
-              Are you sure you want to permanently delete this project? This action cannot be undone.
+        <AlertDialogContent className="max-w-sm rounded-2xl border-border bg-popover p-8 text-popover-foreground">
+          <AlertDialogHeader className="text-left">
+            <AlertDialogTitle className="text-xl font-medium">Delete this idea?</AlertDialogTitle>
+            <AlertDialogDescription className="text-[15px] text-muted-foreground">
+              Its likes, comments and files go with it. Investors who committed are told, and their
+              commitments are cancelled. This can&apos;t be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
-          <AlertDialogFooter className="mt-4 gap-2">
-            <AlertDialogCancel className="border-border/40 text-foreground hover:bg-accent/40 rounded-lg text-xs h-8 px-3 cursor-pointer">
-              Cancel
+          <AlertDialogFooter className="mt-4 gap-3">
+            {/* Explicit classes: the stock outline variant adds a grey fill and shadow in dark mode. */}
+            <AlertDialogCancel className="h-10 rounded-full border-input bg-transparent px-5 text-[15px] font-normal shadow-none hover:bg-transparent hover:border-muted-foreground dark:bg-transparent dark:hover:bg-transparent">
+              Keep it
             </AlertDialogCancel>
-            <AlertDialogAction onClick={handleDelete} className="bg-rose-500 hover:bg-rose-600 text-white rounded-lg text-xs h-8 px-3 cursor-pointer">
-              Delete
+            <AlertDialogAction onClick={handleDelete} className="h-10 rounded-full bg-destructive px-5 text-[15px] text-black hover:bg-destructive hover:opacity-90">
+              Delete idea
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
