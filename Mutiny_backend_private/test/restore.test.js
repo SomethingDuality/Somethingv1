@@ -1,6 +1,7 @@
 const { test, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
 const { start, stop, resetDb, agent, settle } = require('./helpers/server.js');
+const { joinTeam } = require('./helpers/teams.js');
 
 let Investor;
 
@@ -34,10 +35,7 @@ test('founder overview: real totals per idea, team without duplicates, and real 
 	await ivan.post(`/ideas/${a}/like`);
 	await ivan.post(`/ideas/${a}/comments`, { text: 'Who pays per kilo?' });
 	assert.equal((await ivan.post('/investor/commit', { ideaId: a, amount: 500 })).status, 201);
-	for (const idea of [a, b]) {
-		const team = await fay.post('/teams', { idea_id: idea, name: 'Crew' });
-		await fay.post(`/teams/${team.body.team._id}/members`, { user_id: mo.id, role: 'Engineer' });
-	}
+	for (const idea of [a, b]) await joinTeam(fay, mo, idea, 'Engineer');
 	await settle();
 
 	const res = await fay.get('/founder/overview');
@@ -54,7 +52,7 @@ test('founder overview: real totals per idea, team without duplicates, and real 
 
 	const kinds = activity.map((x) => x.kind);
 	for (const k of ['like', 'comment', 'commit', 'team']) assert.ok(kinds.includes(k), `${k} in ${kinds}`);
-	assert.ok(activity.find((x) => x.kind === 'like').text.startsWith('Someone liked'), 'likes stay anonymous');
+	assert.ok(activity.find((x) => x.kind === 'like').text.startsWith('Someone supported'), 'supporters stay anonymous');
 	assert.match(activity.find((x) => x.kind === 'commit').text, /^Ivan committed \$500 to “Campus compost”/);
 	assert.equal(kpis.needsYou, (await fay.get('/notifications')).body.filter((n) => !n.read).length);
 });
@@ -95,7 +93,7 @@ test('an idea carries the founder card, the team and a commitment total', async 
 	const a = await newIdea(fay);
 	await ivan.post('/investor/commit', { ideaId: a, amount: 500 });
 	await olga.post('/investor/commit', { ideaId: a, amount: 1500 });
-	await fay.post('/teams', { idea_id: a, name: 'Crew' });
+	await joinTeam(fay, await newUser('founder', 'Mo'), a, 'Engineer');
 
 	const res = await ivan.get(`/ideas/${a}`);
 	assert.equal(res.status, 200);
@@ -104,7 +102,7 @@ test('an idea carries the founder card, the team and a commitment total', async 
 	assert.equal(res.body.founder.links.linkedin, 'https://www.linkedin.com/in/fay');
 	assert.equal(res.body.founder.email, undefined, 'no email on the card');
 	assert.deepEqual(res.body.commitments, { count: 2, total: 2000, released: 0 });
-	assert.deepEqual(res.body.team.map((m) => m.name), ['Fay']);
+	assert.deepEqual(res.body.team.map((m) => m.name), ['Fay', 'Mo']);
 });
 
 test('watchlist: saved on the server, drafts refused, cleaned up when the idea is deleted', async () => {

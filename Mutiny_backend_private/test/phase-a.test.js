@@ -134,5 +134,18 @@ test('collaboration requests notify the owner once per requester', async () => {
 	await cole.post(`/ideas/${ideaId}/collaborate`);
 	await cole.post(`/ideas/${ideaId}/collaborate`);
 	await cole.post(`/ideas/${ideaId}/collaborate`);
-	assert.equal((await BaseUser.findById(fay.id).lean()).notifications.length, 1);
+	const { notifications } = await BaseUser.findById(fay.id).lean();
+	assert.equal(notifications.length, 1);
+	// C0: the owner sees who asked, never their email.
+	assert.match(notifications[0].text, /^Cole asked to join “/);
+	assert.doesNotMatch(notifications[0].text, /@/);
+});
+
+test('asking to join a draft answers like a missing idea', async () => {
+	const fay = await newUser('founder', 'Fay');
+	const cole = await newUser('founder', 'Cole');
+	const draftId = await newIdea(fay, { title: 'Quiet draft', isDraft: true });
+	const res = await cole.post(`/ideas/${draftId}/collaborate`);
+	assert.equal(res.status, 404);
+	assert.equal((await BaseUser.findById(fay.id).lean()).notifications.length, 0);
 });

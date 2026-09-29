@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const { start, stop, resetDb, agent, baseUrl } = require('./helpers/server.js');
+const { joinTeam } = require('./helpers/teams.js');
 
 let Idea, Like, Comment, Team, Portfolio, BaseUser;
 
@@ -47,10 +48,7 @@ const busyIdea = async (fay, ivan, mo) => {
 	assert.equal((await ivan.post(`/ideas/${id}/like`)).status, 200);
 	assert.equal((await ivan.post(`/ideas/${id}/comments`, { text: 'Who pays per kilo?' })).status, 201);
 	assert.equal((await ivan.post('/investor/commit', { ideaId: id, amount: 500 })).status, 201);
-	const team = await fay.post('/teams', { idea_id: id, name: 'Compost crew' });
-	assert.equal(team.status, 201, JSON.stringify(team.body));
-	const teamId = team.body.team?._id ?? team.body._id;
-	assert.equal((await fay.post(`/teams/${teamId}/members`, { user_id: mo.id, role: 'Engineer' })).status, 200);
+	await joinTeam(fay, mo, id, 'Engineer');
 	await upload(fay, id);
 	assert.ok(fs.existsSync(uploadsDir(id)), 'the file is on disk before deletion');
 	return id;
