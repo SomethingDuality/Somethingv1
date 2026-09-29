@@ -164,7 +164,7 @@ const quote = (s, n = 80) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 const usd = (n) => `$${Number(n || 0).toLocaleString('en-US')}`;
 
 // The founder's home: counts, per-idea money, the team and recent activity, all from real rows.
-// Likes are shown without a name (Ghost Mode hides who looked or liked); comments are public and
+// Supports are shown without a name (Ghost Mode hides who looked or supported); comments are public and
 // money reveals identity, so those carry names.
 const get_overview = async (req, res) => {
 	if (!assertFounder(req, res)) return;
@@ -227,7 +227,7 @@ const get_overview = async (req, res) => {
 
 		const activity = [
 			...likes.map((l) => ({ kind: 'like', ideaId: String(l.postID), at: l.createdAt,
-				text: `Someone liked “${titleOf.get(String(l.postID))}”` })),
+				text: `Someone supported “${titleOf.get(String(l.postID))}”` })),
 			...comments.map((c) => ({ kind: 'comment', ideaId: String(c.postID), at: c.createdAt,
 				text: `${c.userId?.name || 'Someone'} commented on “${titleOf.get(String(c.postID))}”: ${quote(c.text)}` })),
 			...moneyEvents.flatMap(({ investor, ideaId, inv }) => [
