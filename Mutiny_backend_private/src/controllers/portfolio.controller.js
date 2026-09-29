@@ -2,7 +2,8 @@ const mongoose = require('mongoose');
 const { Portfolio } = require('../models/portfolio.model.js');
 const { Investor }  = require('../models/user.model.js');
 const { Idea }      = require('../models/ideas.model.js');
-const { pushNotification } = require('../services/notifications.service.js');
+const { pushNotification, ideaLink } = require('../services/notifications.service.js');
+const { isPublicIdea } = require('../community/targets.js');
 const { incrementTrust }   = require('../utils/trust.util.js');
 const {
     publishInvestmentCommitted,
@@ -42,8 +43,9 @@ const commit = async (req, res) => {
 
 	try {
 		
-		const idea = await Idea.findById(ideaId).select('title founder_id').lean();
-		if (!idea) {
+		const idea = await Idea.findById(ideaId).select('title founder_id isDraft moderation').lean();
+		// Drafts and hidden ideas can't take commitments: to investors they don't exist.
+		if (!isPublicIdea(idea)) {
 			return res.status(404).json({ success: false, message: 'Idea not found' });
 		}
 
@@ -99,8 +101,11 @@ const commit = async (req, res) => {
 
 			await pushNotification(
 				idea.founder_id,
-				`${investorName}${firmSuffix}${verified} committed $${Number(amount).toLocaleString()} to your idea “${idea.title}”`
+				`${investorName}${firmSuffix}${verified} committed $${Number(amount).toLocaleString()} to your idea “${idea.title}”`,
+				{ link: '/founder/funding' }
 			);
+			// Money needs a name (C5): any ghost chat with this founder shows it from now on.
+			await require('../chat/chat.service.js').revealOnCommit({ investorId: req.user._id, founderId: idea.founder_id, ideaTitle: idea.title });
 		}
 
 		publishInvestmentCommitted({
@@ -308,7 +313,8 @@ async function release(req, res) {
 
 			await pushNotification(
 				idea.founder_id,
-				`${investorName}${firmSuffix} released $${releaseAmount.toLocaleString()} for “${idea.title}”${milestone ? ` (milestone “${milestone.title}”)` : ''}`
+				`${investorName}${firmSuffix} released $${releaseAmount.toLocaleString()} for “${idea.title}”${milestone ? ` (milestone “${milestone.title}”)` : ''}`,
+				{ link: '/founder/funding' }
 			);
 		}
 

@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { moderationSchema } = require('./moderation.schema.js');
 
 const milestoneSchema = new mongoose.Schema({
 	title:  { type: String, required: true, maxlength: 120 },
@@ -77,13 +78,20 @@ const ideaSchema = new mongoose.Schema({
 	pow:    { type: String },
 
 	// Where each user-set value came from (see profile/applyUpdate.js).
-	fieldSources: { type: Map, of: new mongoose.Schema({ source: String, at: Date }, { _id: false }), default: undefined }
+	fieldSources: { type: Map, of: new mongoose.Schema({ source: String, at: Date }, { _id: false }), default: undefined },
+	// Community moderation (C1); missing = visible.
+	moderation: { type: moderationSchema, default: undefined }
 
 }, { timestamps: true });
 
 // Hot queries: a founder's ideas (newest first) and the public discover/feed lists.
 ideaSchema.index({ founder_id: 1, createdAt: -1 });
 ideaSchema.index({ isDraft: 1, createdAt: -1 });
+// The all-time leaderboard: public ideas by supports.
+ideaSchema.index({ isDraft: 1, likes: -1 });
+// The admin moderation queue.
+ideaSchema.index({ 'moderation.state': 1 }, { sparse: true });
+ideaSchema.index({ 'moderation.needsReview': 1 }, { sparse: true });
 
 const Idea = mongoose.model('Idea', ideaSchema);
 

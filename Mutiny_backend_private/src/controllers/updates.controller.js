@@ -3,7 +3,10 @@ const { Idea } = require('../models/ideas.model.js');
 const { IdeaUpdate } = require('../models/ideaUpdate.model.js');
 const { BaseUser, Investor } = require('../models/user.model.js');
 const { Portfolio } = require('../models/portfolio.model.js');
-const { pushNotification } = require('../services/notifications.service.js');
+const { pushNotification, ideaLink } = require('../services/notifications.service.js');
+const { canSeeIdea, isPublicIdea } = require('../community/targets.js');
+const { checkText, BLOCKED } = require('../community/filter.js');
+const { emit } = require('../events/index.js');
 
 const MAX_TEXT = 1000;
 const UPDATES_PER_DAY = 5;
@@ -11,13 +14,13 @@ const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 const excerpt = (s, n = 80) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
-// The idea, or null when this caller may not see it (drafts are owner-only, like GET /ideas/:id).
+// The idea, or null when this caller may not see it (drafts and hidden ideas are owner-only,
+// like GET /ideas/:id).
 const visibleIdea = async (id, user) => {
 	if (!mongoose.Types.ObjectId.isValid(id)) return null;
-	const idea = await Idea.findById(id).select('title founder_id isDraft').lean();
-	if (!idea) return null;
-	const isOwner = user && String(idea.founder_id) === String(user._id);
-	return idea.isDraft && !isOwner ? null : { ...idea, isOwner };
+	const idea = await Idea.findById(id).select('title founder_id isDraft moderation').lean();
+	if (!canSeeIdea(idea, user?._id)) return null;
+	return { ...idea, isOwner: Boolean(user) && String(idea.founder_id) === String(user._id) };
 };
 
 // Everyone following the idea: investors who saved it and investors who committed to it.
@@ -45,6 +48,7 @@ const post_update = async (req, res) => {
 	const text = typeof req.body?.text === 'string' ? req.body.text.trim() : '';
 	if (!text) return res.status(400).json({ success: false, message: 'Write the update first' });
 	if (text.length > MAX_TEXT) return res.status(400).json({ success: false, message: `Keep it under ${MAX_TEXT} characters` });
+	if (checkText(text).verdict === 'block') return res.status(400).json(BLOCKED);
 
 	try {
 		const idea = await visibleIdea(req.params.id, req.user);
@@ -57,15 +61,16 @@ const post_update = async (req, res) => {
 		}
 
 		const update = await IdeaUpdate.create({ idea_id: idea._id, founder_id: req.user._id, text });
+		emit('idea.update_posted', idea._id, { ideaId: String(idea._id), founderId: String(req.user._id), updateId: String(update._id) });
 
-		// Drafts have no followers to tell.
-		if (!idea.isDraft) {
+		// Drafts (and hidden ideas) have no followers to tell.
+		if (isPublicIdea(idea)) {
 			const founder = await BaseUser.findById(req.user._id).select('name').lean();
 			const followers = await followersOf(idea._id);
 			await Promise.all(followers.map((uid) => pushNotification(
 				uid,
 				`${founder?.name || 'The founder'} posted an update on “${idea.title}”: ${excerpt(text)}`,
-				{ key: `update:${update._id}:${uid}` },
+				{ key: `update:${update._id}:${uid}`, link: ideaLink('investor', idea._id) },
 			)));
 		}
 
@@ -102,7 +107,7 @@ const request_update = async (req, res) => {
 	}
 	try {
 		const idea = await visibleIdea(req.params.id, req.user);
-		if (!idea || idea.isDraft) return res.status(404).json({ success: false, message: 'Idea not found' });
+		if (!isPublicIdea(idea)) return res.status(404).json({ success: false, message: 'Idea not found' });
 
 		const key = `update-request:${idea._id}:${req.user._id}:${Math.floor(Date.now() / WEEK_MS)}`;
 		const already = await BaseUser.exists({ _id: idea.founder_id, 'notifications.key': key });
@@ -110,7 +115,7 @@ const request_update = async (req, res) => {
 			return res.status(200).json({ success: true, sent: false, message: 'You already asked this week' });
 		}
 		const investor = await BaseUser.findById(req.user._id).select('name').lean();
-		await pushNotification(idea.founder_id, `${investor?.name || 'An investor'} asked for an update on “${idea.title}”`, { key });
+		await pushNotification(idea.founder_id, `${investor?.name || 'An investor'} asked for an update on “${idea.title}”`, { key, link: ideaLink('founder', idea._id) });
 		return res.status(200).json({ success: true, sent: true });
 	} catch (err) {
 		console.error('request_update:', err);

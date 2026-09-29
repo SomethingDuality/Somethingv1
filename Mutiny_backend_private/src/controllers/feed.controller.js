@@ -1,6 +1,7 @@
 const { Idea } = require('../models/ideas.model.js');
 const cache = require('../utils/cache.js');
 const { addLike, removeLike, LikeError } = require('../services/likes.service.js');
+const { PUBLIC_IDEA } = require('../community/targets.js');
 
 // Only real idea stages are valid "genres", so arbitrary input can't mint unbounded cache keys.
 const GENRES = Idea.schema.path('stage').enumValues;
@@ -21,7 +22,8 @@ const fetch_popular_posts = async (req, res) => {
 		if (cached) return res.status(200).json({ success: true, posts: cached });
 
 		const posts = await Idea
-			.find({ stage: normalizedGenre, isDraft: false })
+			.find({ ...PUBLIC_IDEA, stage: normalizedGenre })
+			.select('-moderation')
 			.sort({ likes: -1 })
 			.limit(limit)
 			.lean();
@@ -37,7 +39,7 @@ const fetch_popular_posts = async (req, res) => {
 
 const respondLikeError = (res, err, action) => {
 	if (err instanceof LikeError) {
-		return res.status(err.status).json({ success: false, message: err.message });
+		return res.status(err.status).json({ success: false, message: err.message, ...(err.code && { code: err.code }) });
 	}
 	console.error(`${action}:`, err);
 	return res.status(500).json({ success: false, message: 'Internal server error' });

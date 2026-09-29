@@ -4,6 +4,9 @@ const { Idea }     = require('../models/ideas.model.js');
 const { BaseUser } = require('../models/user.model.js');
 const cache = require('../utils/cache.js');
 const { emit } = require('../events/index.js');
+const { SHOWN, canSeeIdea, isShown } = require('../community/targets.js');
+const { HIDDEN_STATES } = require('../models/moderation.schema.js');
+const { checkText, BLOCKED } = require('../community/filter.js');
 
 // Mongo is the source of truth for comments. Redis only caches the shaped list per idea
 // and is invalidated on every write; Kafka carries side effects (owner notification).
@@ -18,7 +21,15 @@ const shape = (c, authorName) => ({
 	authorId:  c.userId && c.userId._id ? c.userId._id : c.userId,
 	text:      c.text,
 	timestamp: new Date(c.createdAt).toLocaleDateString(),
+	// Only ever set on the author's own comment: others never receive hidden or removed ones.
+	...(HIDDEN_STATES.includes(c.moderation?.state) && { hidden: c.moderation.state }),
 });
+
+// The idea, when this caller may see it (drafts and hidden ideas are the founder's only).
+const visibleIdea = async (id, userId) => {
+	const idea = await Idea.findById(id).select('founder_id isDraft moderation').lean();
+	return canSeeIdea(idea, userId) ? idea : null;
+};
 
 const cleanText = (text) => (typeof text === 'string' ? text.trim() : '');
 
@@ -30,16 +41,30 @@ const get_comments = async (req, res) => {
 	}
 
 	try {
-		const cached = await cache.getJSON(cacheKey(id));
-		if (cached) return res.status(200).json({ success: true, comments: cached });
+		if (!(await visibleIdea(id, req.user?._id))) {
+			return res.status(404).json({ success: false, message: 'Idea not found' });
+		}
 
-		const comments = await Comment.find({ postID: id })
-			.populate('userId', 'name')
-			.sort({ createdAt: 1 })
-			.lean();
+		// The shown list is the same for everyone, so it is what gets cached.
+		let shaped = await cache.getJSON(cacheKey(id));
+		if (!shaped) {
+			const comments = await Comment.find({ postID: id, ...SHOWN })
+				.populate('userId', 'name')
+				.sort({ createdAt: 1 })
+				.lean();
+			shaped = comments.map((c) => shape(c));
+			await cache.setJSON(cacheKey(id), shaped, CACHE_TTL_SECONDS);
+		}
 
-		const shaped = comments.map((c) => shape(c));
-		await cache.setJSON(cacheKey(id), shaped, CACHE_TTL_SECONDS);
+		// The author still sees their own hidden comments, marked, in place.
+		if (req.user) {
+			const own = await Comment.find({ postID: id, userId: req.user._id, 'moderation.state': { $in: HIDDEN_STATES } })
+				.populate('userId', 'name').lean();
+			if (own.length) {
+				shaped = [...shaped, ...own.map((c) => ({ ...shape(c), createdAt: c.createdAt }))]
+					.sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
+			}
+		}
 
 		return res.status(200).json({ success: true, comments: shaped });
 	} catch (err) {
@@ -60,14 +85,19 @@ const add_comment = async (req, res) => {
 		return res.status(400).json({ success: false, message: `Comment must be 1–${MAX_COMMENT_LENGTH} characters` });
 	}
 
+	const words = checkText(text);
+	if (words.verdict === 'block') return res.status(400).json(BLOCKED);
+
 	try {
-		const idea = await Idea.findById(id).select('_id').lean();
-		if (!idea) return res.status(404).json({ success: false, message: 'Idea not found' });
+		if (!(await visibleIdea(id, user_id))) return res.status(404).json({ success: false, message: 'Idea not found' });
 
 		// The access token only carries {_id, role}, so the display name comes from the DB.
 		const author = await BaseUser.findById(user_id).select('name').lean();
 
-		const comment = await Comment.create({ postID: id, userId: user_id, text });
+		const comment = await Comment.create({
+			postID: id, userId: user_id, text,
+			...(words.verdict === 'review' && { moderation: { needsReview: true, flaggedTerms: words.terms } }),
+		});
 		await Idea.updateOne({ _id: id }, { $inc: { comments: 1 } });
 		await cache.del(cacheKey(id));
 
@@ -97,6 +127,9 @@ const update_comment = async (req, res) => {
 		return res.status(400).json({ success: false, message: `Comment must be 1–${MAX_COMMENT_LENGTH} characters` });
 	}
 
+	const words = checkText(text);
+	if (words.verdict === 'block') return res.status(400).json(BLOCKED);
+
 	try {
 		const comment = await Comment.findById(commentId);
 		if (!comment) return res.status(404).json({ success: false, message: 'Comment not found' });
@@ -106,6 +139,10 @@ const update_comment = async (req, res) => {
 		}
 
 		comment.text = text;
+		if (words.verdict === 'review') {
+			comment.set('moderation.needsReview', true);
+			comment.set('moderation.flaggedTerms', words.terms);
+		}
 		await comment.save();
 		await cache.del(cacheKey(comment.postID));
 
@@ -136,7 +173,8 @@ const delete_comment = async (req, res) => {
 		}
 
 		const deleted = await Comment.deleteOne({ _id: commentId });
-		if (deleted.deletedCount === 1) {
+		// Hidden and removed comments were already taken off the counter.
+		if (deleted.deletedCount === 1 && isShown(comment.moderation)) {
 			await Idea.updateOne({ _id: comment.postID }, { $inc: { comments: -1 } });
 		}
 		await cache.del(cacheKey(comment.postID));

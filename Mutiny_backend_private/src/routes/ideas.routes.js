@@ -26,6 +26,9 @@ const {
 } = require('../controllers/comments.controller.js');
 
 const { protect, optionalAuth } = require('../middleware/auth.middleware.js');
+const { make } = require('../middleware/rateLimits.js');
+
+const commentLimiter = make('comments', { windowMs: 10 * 60 * 1000, limit: 20, byUser: true });
 const { list_updates, post_update, delete_update, request_update } = require('../controllers/updates.controller.js');
 const { add_milestone, update_milestone, delete_milestone } = require('../controllers/milestones.controller.js');
 
@@ -69,7 +72,7 @@ const uploadAttachment = multer({
 });
 
 
-router.get('/discover',  fetch_discover_ideas);
+router.get('/discover',  optionalAuth, fetch_discover_ideas);
 
 
 router.get('/user',      protect, fetch_user_ideas);
@@ -101,9 +104,9 @@ router.put('/:id/milestones/:mid',           protect, update_milestone);
 router.delete('/:id/milestones/:mid',        protect, delete_milestone);
 
 
-router.get('/:id/comments',                   get_comments);
-router.post('/:id/comments',                  protect, add_comment);
-router.put('/comments/:commentId',            protect, update_comment);
+router.get('/:id/comments',                   optionalAuth, get_comments);
+router.post('/:id/comments',                  protect, commentLimiter, add_comment);
+router.put('/comments/:commentId',            protect, commentLimiter, update_comment);
 router.delete('/comments/:commentId',         protect, delete_comment);
 
 module.exports = router;

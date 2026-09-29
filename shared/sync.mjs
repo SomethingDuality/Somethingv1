@@ -7,15 +7,24 @@ import { fileURLToPath } from "node:url"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const root = join(here, "..")
-const FILES = ["taxonomy.json", "question-bank.json"]
-const TARGETS = ["frontend/lib/shared", "Mutiny_backend_private/src/shared"]
+const FRONTEND = "frontend/lib/shared"
+const NODE = "Mutiny_backend_private/src/shared"
+const AGENT = "agent/app/shared"
+// The word lists stay on the server: shipped to the browser, they would tell spammers what to avoid.
+// agent-collections.json is server-only too: Node purges those collections on deletion (P16).
+const FILES = {
+  "taxonomy.json": [FRONTEND, NODE, AGENT],
+  "question-bank.json": [FRONTEND, NODE, AGENT],
+  "moderation.json": [NODE],
+  "agent-collections.json": [NODE, AGENT],
+}
 const check = process.argv.includes("--check")
 
 let drift = false
-for (const file of FILES) {
+for (const [file, targets] of Object.entries(FILES)) {
   const source = readFileSync(join(here, file), "utf8")
   JSON.parse(source) // fail loudly on invalid JSON
-  for (const target of TARGETS) {
+  for (const target of targets) {
     const dir = join(root, target)
     const out = join(dir, file.replace(".json", ".generated.json"))
     const current = existsSync(out) ? readFileSync(out, "utf8") : null

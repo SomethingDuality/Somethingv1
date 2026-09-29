@@ -1,0 +1,34 @@
+{
+  "_note": "Starter lists for the community word filter (C1). Somay owns these lists; extend them any time, including Hinglish (P15), then run: node shared/sync.mjs. Entries are matched as whole words or whole phrases after normalising case, accents, leetspeak, zero-width characters, stretched letters and spaced-out letters. block: the post is refused and the writer keeps their text. review: the post goes up and lands in the admin review queue. allow: words that must never match.",
+  "block": [
+    "fuck",
+    "fucking",
+    "motherfucker",
+    "cunt",
+    "chutiya",
+    "chutia",
+    "chootiya",
+    "madarchod",
+    "behenchod",
+    "bhenchod",
+    "bhosdike",
+    "randi"
+  ],
+  "review": [
+    "guaranteed returns",
+    "guaranteed profit",
+    "double your money",
+    "risk free returns",
+    "crypto giveaway",
+    "whatsapp me",
+    "telegram me",
+    "dm me on telegram",
+    "send me money",
+    "pay me first",
+    "bitch",
+    "bastard",
+    "idiot",
+    "stupid"
+  ],
+  "allow": []
+}

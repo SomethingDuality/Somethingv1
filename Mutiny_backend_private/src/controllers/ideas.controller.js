@@ -6,10 +6,15 @@ const { Portfolio } = require('../models/portfolio.model.js');
 const { pushNotification } = require('../services/notifications.service.js');
 const cache = require('../utils/cache.js');
 const tax = require('../shared/taxonomy.js');
-const { addLike, removeLike } = require('../services/likes.service.js');
+const { addLike, removeLike, supportedSet } = require('../services/likes.service.js');
 const { purgeIdeas } = require('../services/ideaPurge.js');
 const { respondLikeError } = require('./feed.controller.js');
 const { FIELDS, FieldError, sourceKey, isAnswered } = require('../profile/fields.js');
+const { PUBLIC_IDEA, canSeeIdea, moderationFor } = require('../community/targets.js');
+const { checkText, BLOCKED } = require('../community/filter.js');
+
+// Moderation details stay on the server; the author only learns that their item is hidden.
+const withoutModeration = ({ moderation, ...rest }) => rest;
 
 // Validates/normalizes idea fields through the shared registry (tags → sector ids, roles → role ids)
 // and records where each value came from, like profile/applyUpdate.js does for users.
@@ -56,9 +61,10 @@ const fetch_user_ideas = async (req, res) => {
             return res.status(403).json({ success: false, message: 'Founder account required' });
         }
 
-        const ideas = await Idea.find({ founder_id: user_id })
+        const ideas = (await Idea.find({ founder_id: user_id })
             .sort({ createdAt: -1 })
-            .lean();
+            .lean())
+            .map((i) => ({ ...withoutModeration(i), moderation: moderationFor(i, 'founder_id', user_id) }));
 
         await cache.setJSON(key, ideas, 3600);
 
@@ -85,19 +91,25 @@ const locationIdOf = (text) => {
 
 const fetch_discover_ideas = async (req, res) => {
 	try {
-		const ideas = await Idea.find({ isDraft: false })
+		const ideas = (await Idea.find(PUBLIC_IDEA)
 			.sort({ createdAt: -1 })
-			.lean();
+			.lean())
+			.map(withoutModeration);
 
 		// Each idea carries its founder's location (from the founder profile).
 		const founders = await Founder.find({ _id: { $in: [...new Set(ideas.map((i) => String(i.founder_id)))] } })
 			.select('location avatar').lean();
 		const byId = new Map(founders.map((f) => [String(f._id), f]));
+		// Signed in: which of these the viewer already supports (so the button starts right).
+		const supported = await supportedSet(req.user?._id, ideas.map((i) => i._id));
 
 		return res.status(200).json(ideas.map((i) => {
 			const f = byId.get(String(i.founder_id));
 			const location = f?.location || '';
-			return { ...i, founderLocation: location, locationId: locationIdOf(location), founderAvatar: f?.avatar || '' };
+			return {
+				...i, founderLocation: location, locationId: locationIdOf(location), founderAvatar: f?.avatar || '',
+				...(req.user && { supportedByMe: supported.has(String(i._id)) }),
+			};
 		}));
 	} catch (err) {
 		console.error('fetch_discover_ideas:', err);
@@ -114,9 +126,9 @@ const fetch_idea_by_id = async (req, res) => {
 
 	try {
 		const idea = await Idea.findById(id).lean();
-		// A draft is visible only to its founder; everyone else gets the same 404 as a missing idea.
-		const isOwner = req.user && String(idea?.founder_id) === String(req.user._id);
-		if (!idea || (idea.isDraft && !isOwner)) {
+		// Drafts and hidden ideas are visible only to their founder; everyone else gets the same
+		// 404 as a missing idea.
+		if (!canSeeIdea(idea, req.user?._id)) {
 			return res.status(404).json({ success: false, message: 'Idea not found' });
 		}
 
@@ -125,10 +137,11 @@ const fetch_idea_by_id = async (req, res) => {
 
 		// What an investor needs next to the pitch: who the founder is, who is on the team, and
 		// how much has been committed (a total only; individual investors stay private).
-		const [founder, team, portfolios] = await Promise.all([
+		const [founder, team, portfolios, supported] = await Promise.all([
 			Founder.findById(idea.founder_id).select('name headline location avatar socials linkedin github').lean(),
 			Team.findOne({ idea_id: idea._id }).select('members').lean(),
 			Portfolio.find({ 'investments.idea_id': idea._id }).select('investments.idea_id investments.amount_committed investments.amount_released').lean(),
+			supportedSet(req.user?._id, [idea._id]),
 		]);
 		const commitments = { count: 0, total: 0, released: 0 };
 		for (const p of portfolios) {
@@ -141,7 +154,9 @@ const fetch_idea_by_id = async (req, res) => {
 		}
 
 		return res.status(200).json({
-			...idea,
+			...withoutModeration(idea),
+			moderation: moderationFor(idea, 'founder_id', req.user?._id),
+			...(req.user && { supportedByMe: supported.has(String(idea._id)) }),
 			founder: founder ? {
 				id:       founder._id,
 				name:     founder.name || idea.author || '',
@@ -193,6 +208,10 @@ const create_idea = async (req, res) => {
 		throw err;
 	}
 
+	// Public posts go through the word filter; drafts are private until they're published.
+	const words = cleaned.values.isDraft ? { verdict: 'ok' } : checkText(cleaned.values.title, cleaned.values.description);
+	if (words.verdict === 'block') return res.status(400).json(BLOCKED);
+
 	try {
 		const founder = await requireFounder(user_id);
 		if (!founder) {
@@ -228,6 +247,7 @@ const create_idea = async (req, res) => {
 			isDraft:      Boolean(v.isDraft),
 			attachments:  Array.isArray(attachments) ? attachments : [],
 			fieldSources: Object.fromEntries(Object.entries(cleaned.sources).filter(([, v]) => v)),
+			...(words.verdict === 'review' && { moderation: { needsReview: true, flaggedTerms: words.terms } }),
 		});
 
 		await idea.save();
@@ -241,7 +261,7 @@ const create_idea = async (req, res) => {
 			tags:      idea.tags,
 		});
 
-		return res.status(201).json(idea.toObject());
+		return res.status(201).json(withoutModeration(idea.toObject()));
 	} catch (err) {
 		console.error('create_idea:', err);
 		return res.status(500).json({ success: false, message: 'Internal server error' });
@@ -284,16 +304,29 @@ const update_idea = async (req, res) => {
 			if (err instanceof FieldError) return res.status(422).json({ success: false, field: err.path, message: err.message });
 			throw err;
 		}
+		const wasDraft = idea.isDraft;
 		for (const [k, v] of Object.entries(cleaned.values)) idea[k] = v;
 		if (cleaned.values.description !== undefined) idea.desc = makeExcerpt(cleaned.values.description);
 		for (const [k, v] of Object.entries(cleaned.sources)) idea.set(`fieldSources.${k}`, v ?? undefined);
 		if (attachments !== undefined) idea.attachments = Array.isArray(attachments) ? attachments : [];
+
+		// The word filter runs whenever public text changes, or a draft is published.
+		const textChanged = cleaned.values.title !== undefined || cleaned.values.description !== undefined;
+		if (!idea.isDraft && (textChanged || wasDraft)) {
+			const words = checkText(idea.title, idea.description);
+			if (words.verdict === 'block') return res.status(400).json(BLOCKED);
+			if (words.verdict === 'review') {
+				idea.set('moderation.needsReview', true);
+				idea.set('moderation.flaggedTerms', words.terms);
+			}
+		}
 
 		await idea.save();
 		await cache.del(`user_ideas:${user_id}`);
 
 		publishIdeaUpdated({
 			ideaId:  id,
+			founderId: user_id.toString(),
 			changes: {
 				...(title       !== undefined && { title:       idea.title }),
 				...(description !== undefined && { description: true }),
@@ -306,7 +339,8 @@ const update_idea = async (req, res) => {
 			},
 		});
 
-		return res.status(200).json(idea.toObject());
+		const saved = idea.toObject();
+		return res.status(200).json({ ...withoutModeration(saved), moderation: moderationFor(saved, 'founder_id', user_id) });
 	} catch (err) {
 		console.error('update_idea:', err);
 		return res.status(500).json({ success: false, message: 'Internal server error' });
@@ -464,44 +498,25 @@ const upload_attachment_delete = async (req, res) => {
 
 const delete_attachment = upload_attachment_delete;
 
+// "Ask to join" (C5): a chat request to the idea's founder, with a first message. The old
+// endpoint stays as an alias, so a request with no text gets a sensible first line.
 const request_collaboration = async (req, res) => {
-	const user_id = req.user._id;
-	const { id }  = req.params;
-
+	const { id } = req.params;
 	if (!mongoose.Types.ObjectId.isValid(id)) {
 		return res.status(400).json({ success: false, message: 'Invalid idea ID' });
 	}
-
+	const chat = require('../chat/chat.service.js');
 	try {
-		const idea = await Idea.findById(id).select('founder_id').lean();
-		if (!idea) {
-			return res.status(404).json({ success: false, message: 'Idea not found' });
-		}
-
-		const ownerId = idea.founder_id;
-		if (!ownerId) {
-			return res.status(400).json({ success: false, message: 'Idea owner not found' });
-		}
-
-		if (ownerId.toString() === user_id.toString()) {
-			return res.status(400).json({ success: false, message: 'You are the owner of this idea' });
-		}
-
-		
-		const requester = await BaseUser.findById(user_id).select('name email').lean();
-		if (!requester) {
-			return res.status(404).json({ success: false, message: 'Requester user not found' });
-		}
-
-		const name = requester.name || 'Anonymous';
-		const email = requester.email || 'no-email@example.com';
-		const notificationText = `User ${name} (${email}) asked to collaborate`;
-
-		// One notification per requester per idea: repeated clicks can't spam the owner.
-		await pushNotification(ownerId, notificationText, { key: `collab:${id}:${user_id}` });
-
-		return res.status(200).json({ success: true, message: 'Collaboration request sent successfully' });
+		const idea = await Idea.findById(id).select('title').lean();
+		const text = typeof req.body?.text === 'string' && req.body.text.trim()
+			? req.body.text
+			: `Hi, I'd like to help with “${idea?.title || 'your idea'}”.`;
+		const out = await chat.startThread({ user: req.user, ideaId: id, text, clientId: req.body?.clientId });
+		return res.status(200).json({ success: true, message: 'Request sent', ...out });
 	} catch (err) {
+		if (err instanceof chat.ChatError) {
+			return res.status(err.status).json({ success: false, message: err.message, ...(err.code && { code: err.code }) });
+		}
 		console.error('request_collaboration:', err);
 		return res.status(500).json({ success: false, message: 'Internal server error' });
 	}

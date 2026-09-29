@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const { Idea } = require('../models/ideas.model.js');
 const { Founder } = require('../models/user.model.js');
 const { findOverlaps } = require('../services/overlaps.js');
+const { PUBLIC_IDEA } = require('../community/targets.js');
 
 const MAX_TEXT = 2000;
 
@@ -33,7 +34,7 @@ const overlaps = async (req, res) => {
 		}
 
 		// Public ideas from other founders only.
-		const candidates = await Idea.find({ isDraft: false, founder_id: { $ne: req.user._id }, ...(exclude && { _id: { $ne: exclude } }) })
+		const candidates = await Idea.find({ ...PUBLIC_IDEA, founder_id: { $ne: req.user._id }, ...(exclude && { _id: { $ne: exclude } }) })
 			.select('title description tags stage author createdAt').sort({ createdAt: -1 }).limit(2000).lean();
 		const found = findOverlaps(source, candidates);
 

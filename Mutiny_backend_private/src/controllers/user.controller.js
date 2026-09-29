@@ -142,7 +142,7 @@ const login = async (req, res) => {
 
 const me = async (req, res) => {
 	try {
-		const user = await BaseUser.findById(req.user._id).select('-refreshToken');
+		const user = await BaseUser.findById(req.user._id).select('-refreshToken').lean();
 		if (!user) {
 			return res.status(404).json({ success: false, message: 'User not found' });
 		}
@@ -156,6 +156,8 @@ const me = async (req, res) => {
 			hasPassword:   Boolean(user.password),
 			isAdmin:       require('../middleware/admin.middleware.js').isAdminEmail(user.email),
 			authProviders: user.authProviders?.length ? user.authProviders : ['password'],
+			// Investors only: Ghost Mode is on unless they turned it off (C5).
+			...(user.role === 'Investor' && { ghostMode: user.ghostMode !== false }),
 		});
 	} catch (err) {
 		console.error('[ME] 💥 Error:', err.message);
@@ -603,6 +605,48 @@ async function delete_account(req, res) {
 			await Idea.bulkWrite(liked.map(({ _id, n }) => ({ updateOne: { filter: { _id }, update: { $inc: { likes: -n } } } })));
 		}
 		await Like.deleteMany({ userId });
+
+		// Their comments on other people's ideas go too, and come off each idea's count (C1).
+		const { Comment } = require('../models/comments.model.js');
+		const { Report }  = require('../models/report.model.js');
+		const { isShown } = require('../community/targets.js');
+		const { forgetReporter } = require('../services/reports.service.js');
+		const cache = require('../utils/cache.js');
+		// Their problems go with their votes and replies (C3).
+		const { Problem } = require('../models/problem.model.js');
+		const { purgeProblems } = require('./problems.controller.js');
+		const { forgetVoter } = require('../services/votes.service.js');
+		const ownProblems = await Problem.find({ authorId: userId }).select('_id').lean();
+		await purgeProblems(ownProblems.map((p) => p._id));
+
+		const comments = await Comment.find({ userId }).select('postID targetType moderation').lean();
+		if (comments.length) {
+			// Each parent's count drops by the shown comments it loses (ideas and problems).
+			const perParent = { Idea: new Map(), Problem: new Map() };
+			for (const c of comments) {
+				if (!isShown(c.moderation)) continue;
+				const m = perParent[c.targetType === 'Problem' ? 'Problem' : 'Idea'];
+				m.set(String(c.postID), (m.get(String(c.postID)) || 0) + 1);
+			}
+			if (perParent.Idea.size) {
+				await Idea.bulkWrite([...perParent.Idea].map(([_id, n]) => ({ updateOne: { filter: { _id }, update: { $inc: { comments: -n } } } })));
+			}
+			if (perParent.Problem.size) {
+				await Problem.bulkWrite([...perParent.Problem].map(([_id, n]) => ({ updateOne: { filter: { _id }, update: { $inc: { commentsCount: -n } } } })));
+			}
+			await Report.deleteMany({ targetType: 'comment', targetId: { $in: comments.map((c) => c._id) } });
+			await Comment.deleteMany({ userId });
+			await cache.del(...new Set(comments.filter((c) => c.targetType !== 'Problem').map((c) => `comments:v1:${c.postID}`)));
+		}
+		// Reports they filed are withdrawn, and votes they cast come back off the counts.
+		await forgetReporter(userId);
+		await forgetVoter(userId);
+		// Their chats go for both sides, with every message and block (C5).
+		await require('../chat/chat.service.js').forgetChats(userId);
+		// Team invites they sent or received (C6).
+		await require('../services/teams.service.js').forgetInvites(userId);
+		// Everything the agent stored about them: memory, reviews, runs, checkpoints, usage (P16).
+		await require('../agent/purge.js').purgeAgentForUser(userId);
 
 		
 		await BaseUser.findByIdAndDelete(userId);
