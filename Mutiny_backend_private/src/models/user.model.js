@@ -63,7 +63,9 @@ const BaseUserSchema = new mongoose.Schema({
 		timestamp: { type: Date,   default: Date.now },
 		// Idempotency key: the same event replayed never creates a second notification.
 		key:       { type: String },
-		read:      { type: Boolean, default: false }
+		read:      { type: Boolean, default: false },
+		// The in-app page it opens (a path), e.g. the idea it is about.
+		link:      { type: String }
 	}],
 
 	
@@ -190,6 +192,9 @@ const investorSchema = new mongoose.Schema({
 		note:        { type: String, default: '' },
 	},
 
+	// Ghost Mode (C5): founders see "Ghost investor" until the investor shares their name.
+	// On unless the investor turns it off; each chat keeps the setting it started with.
+	ghostMode: { type: Boolean, default: true },
 	// Ideas the investor saved ("Save" in Discover); the first stage of their pipeline.
 	watchlist: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Idea' }],
 	handle: { type: String, default: '' },

@@ -43,7 +43,7 @@ const decide_verification = async (req, res) => {
 		if (r.matchedCount === 0) return res.status(404).json({ success: false, message: 'No pending request for this investor' });
 		await pushNotification(userId, decision === 'verify'
 			? 'You are verified. Founders now see "verified investor" next to your name.'
-			: `Your verification wasn't approved: ${note}`);
+			: `Your verification wasn't approved: ${note}`, { link: '/investor/profile' });
 		return res.status(200).json({ success: true, status });
 	} catch (err) {
 		console.error('decide_verification:', err);

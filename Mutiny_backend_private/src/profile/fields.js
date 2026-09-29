@@ -143,6 +143,7 @@ const FIELDS = {
 		coInvestors:            { roles: ['Investor'], set: strList(20, 100) },
 		notes:                  { roles: ['Investor'], set: notesList },
 		publicProfile:          { roles: ['Investor'], set: bool },
+		ghostMode:              { roles: ['Investor'], set: bool },
 		handle:                 { roles: ['Investor'], set: handle },
 	},
 	idea: {

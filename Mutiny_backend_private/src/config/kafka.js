@@ -20,6 +20,8 @@ const TOPICS = {
     NOTIFICATIONS:     'notifications',
     PROFILE:           'profile',
     QUESTIONS:         'questions',
+    COMMUNITY:         'community',
+    CHATS:             'chats',
 };
 
 let producer   = null;

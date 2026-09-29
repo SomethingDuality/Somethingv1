@@ -18,11 +18,27 @@ const get_notifications = async (req, res) => {
 				text:      n.text,
 				timestamp: n.timestamp,
 				read:      Boolean(n.read),
+				link:      n.link || null,
 			}));
 
 		return res.status(200).json(queue);
 	} catch (err) {
 		console.error('get_notifications:', err);
+		return res.status(500).json({ success: false, message: 'Internal server error' });
+	}
+};
+
+// What the shell polls every 20 s for its badges: unread notifications, and chats (C5).
+const inbox_summary = async (req, res) => {
+	try {
+		const user = await BaseUser.findById(req.user._id).select('notifications.read').lean();
+		if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+		const unread = (user.notifications || []).filter((n) => !n.read).length;
+		const { chatSummary } = require('../chat/chat.service.js');
+		const chats = await chatSummary(req.user._id);
+		return res.status(200).json({ serverTime: new Date().toISOString(), notifications: { unread }, chats });
+	} catch (err) {
+		console.error('inbox_summary:', err);
 		return res.status(500).json({ success: false, message: 'Internal server error' });
 	}
 };
@@ -84,6 +100,7 @@ module.exports = {
 	mark_one_read,
 	delete_one,
 	clear_all,
+	inbox_summary,
 	// Re-exported for existing callers; the implementation lives in services/.
 	pushNotification
 };

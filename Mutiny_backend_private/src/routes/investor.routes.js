@@ -14,6 +14,7 @@ const {
 	save_idea,
 	unsave_idea,
 	submit_verification,
+	update_ghost_mode,
 } = require('../controllers/investor.controller.js');
 
 const {
@@ -47,6 +48,7 @@ router.put('/preferences',        update_preferences);
 router.put('/interests',          update_interests);
 router.put('/visibility',         update_visibility);
 router.post('/verification',             submit_verification);
+router.put('/ghost-mode',                update_ghost_mode);
 router.get('/watchlist',                 get_watchlist);
 router.post('/watchlist/:ideaId',        save_idea);
 router.delete('/watchlist/:ideaId',      unsave_idea);

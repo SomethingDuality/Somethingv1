@@ -1,6 +1,7 @@
 const { Investor } = require('../models/user.model.js');
 const { applyUpdate, FieldError } = require('../profile/applyUpdate.js');
 const tax = require('../shared/taxonomy.js');
+const { PUBLIC_IDEA } = require('../community/targets.js');
 
 
 const PROFILE_SELECT =
@@ -154,6 +155,21 @@ const update_visibility = async (req, res) => {
 
 
 
+// PUT /investor/ghost-mode { on }: new chats start as "Ghost investor" while it is on.
+// Chats already started keep the setting they began with.
+const update_ghost_mode = async (req, res) => {
+	if (!assertInvestor(req, res)) return;
+	if (typeof req.body?.on !== 'boolean') return res.status(400).json({ success: false, message: 'on must be true or false' });
+	try {
+		await applyUpdate({ userId: req.user._id, role: 'Investor', patch: { ghostMode: req.body.on }, source: 'profile' });
+		return res.status(200).json({ success: true, ghostMode: req.body.on });
+	} catch (err) {
+		if (err instanceof FieldError) return res.status(422).json({ success: false, field: err.path, message: err.message });
+		console.error('update_ghost_mode:', err);
+		return res.status(500).json({ success: false, message: 'Internal server error' });
+	}
+};
+
 const update_avatar = async (req, res) => {
 	if (!assertInvestor(req, res)) return;
 
@@ -195,7 +211,7 @@ const submit_verification = async (req, res) => {
 		const { BaseUser } = require('../models/user.model.js');
 		const { pushNotification } = require('../services/notifications.service.js');
 		const admins = await BaseUser.find({ email: { $in: adminEmails() } }).select('_id').lean();
-		await Promise.all(admins.map((a) => pushNotification(a._id, `${current?.name || 'An investor'} asked to be verified`, { key: `verify:${req.user._id}:${submittedAt.getTime()}` })));
+		await Promise.all(admins.map((a) => pushNotification(a._id, `${current?.name || 'An investor'} asked to be verified`, { key: `verify:${req.user._id}:${submittedAt.getTime()}`, link: '/admin' })));
 
 		const fresh = await Investor.findById(req.user._id).select(PROFILE_SELECT).lean();
 		return res.status(200).json(toProfileShape(fresh));
@@ -216,7 +232,7 @@ const get_watchlist = async (req, res) => {
 		const { Idea } = require('../models/ideas.model.js');
 		const doc = await Investor.findById(req.user._id).select('watchlist').lean();
 		const ids = doc?.watchlist || [];
-		const ideas = await Idea.find({ _id: { $in: ids }, isDraft: false })
+		const ideas = await Idea.find({ _id: { $in: ids }, ...PUBLIC_IDEA })
 			.select('title author stage tags createdAt likes').lean();
 		const byId = new Map(ideas.map((i) => [String(i._id), i]));
 		return res.status(200).json({
@@ -238,7 +254,7 @@ const save_idea = async (req, res) => {
 	}
 	try {
 		const { Idea } = require('../models/ideas.model.js');
-		const idea = await Idea.findOne({ _id: ideaId, isDraft: false }).select('_id').lean();
+		const idea = await Idea.findOne({ _id: ideaId, ...PUBLIC_IDEA }).select('_id').lean();
 		if (!idea) return res.status(404).json({ success: false, message: 'Idea not found' });
 		// The size check and the add are one write, so parallel saves can't pass the cap.
 		const r = await Investor.updateOne(
@@ -273,6 +289,7 @@ const unsave_idea = async (req, res) => {
 
 module.exports = {
 	submit_verification,
+	update_ghost_mode,
 	get_watchlist,
 	save_idea,
 	unsave_idea,

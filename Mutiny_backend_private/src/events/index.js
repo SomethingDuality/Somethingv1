@@ -10,6 +10,8 @@ const TOPIC_BY_PREFIX = {
     notification: TOPICS.NOTIFICATIONS,
     profile:      TOPICS.PROFILE,
     question:     TOPICS.QUESTIONS,
+    problem:      TOPICS.COMMUNITY,
+    chat:         TOPICS.CHATS,
 };
 
 const runLocally = (event) => {
