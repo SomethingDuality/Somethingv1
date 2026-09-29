@@ -1,38 +1,46 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
 import { useParams, useRouter } from "next/navigation"
-import apiClient from "@/lib/axios"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Separator } from "@/components/ui/separator"
+import apiClient, { assetUrl } from "@/lib/axios"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
-import { ArrowLeft, FileText, ExternalLink, ShieldCheck, Lock, CheckCircle, Loader2 } from "lucide-react"
-import { cn } from "@/lib/utils"
+import { apiError, cn } from "@/lib/utils"
+import { Aside, Main, Page, PageTitle, Section, Split, pillClass, quietLinkClass, usd } from "@/components/shell/page"
+import { FounderCard, type FounderCardData } from "@/components/founder-card"
+import { fileKind } from "@/lib/files"
+import { IdeaCover } from "@/components/visual/idea-cover"
+import { IdeaFacts } from "@/components/visual/idea-facts"
+import { MoneyPanel } from "@/components/visual/money-panel"
+import { IdeaUpdates } from "@/components/idea-updates"
+import { IdeaMilestones, toMilestone, type Milestone } from "@/components/idea-milestones"
+import { ReleaseDialog, type ReleaseTarget } from "@/components/release-dialog"
+import { toast } from "@/components/ui/use-toast"
+import { useAuth } from "@/components/auth-provider"
+import { normalizeList } from "@/lib/taxonomy"
+import { SkeletonRows } from "@/components/visual/skeleton"
 
+/** What the brief shows, all from GET /ideas/:id. */
 type Project = {
   id: string
   name: string
   domains: string[]
   desc: string
-  stage: "Pre‑seed" | "Seed" | "Angel" | "Series A"
+  stage: string
   launchedAt: string | null
-  trustPoints: number
-  location: string
-  investmentNeeded: number
-  fundsGained: number
-  fundsSpent: number
-  founders: { id: string; name: string; role: string }[]
-  uploads: { type: "deck" | "link" | "image"; label: string; href?: string; src?: string }[]
-  communityTarget?: number
-  communityRaised?: number
-  pledges?: any[]
-  communityUpdates?: any[]
+  views: number
+  likes: number
+  comments: number
+  founder: FounderCardData | null
+  team: { name: string; role: string; isFounder: boolean }[]
+  commitments: { count: number; total: number; released: number }
+  files: { name: string; url?: string; size?: string; type?: string }[]
+  raising: string
+  milestones: Milestone[]
 }
 
-const MOCK: Project[] = []
+/** This investor's commitment to the idea, as GET /investor/portfolio returns it. */
+type Mine = { id: string; committed: number; released: number; releases: { amount: number; milestoneId: string | null }[] }
 
 export default function ProjectBriefPage() {
   const router = useRouter()
@@ -54,101 +62,112 @@ export default function ProjectBriefPage() {
     setNdaSigned(isSigned)
   }, [id])
 
+  const [loadError, setLoadError] = useState<string | null>(null)
+
   useEffect(() => {
     if (!id) return
     setIsLoadingProject(true)
+    setLoadError(null)
 
-    const fetchProjectAndCommunity = async () => {
-      let projectData: any = null
+    const fetchProject = async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let projectData: any
       try {
-        const res = await apiClient.get(`/ideas/${id}`)
-        projectData = res.data
+        projectData = (await apiClient.get(`/ideas/${id}`)).data
       } catch (err) {
-        console.warn("Failed to fetch project from API, using local projects-store fallback:", err)
-      }
-
-      try {
-        const { getCommunityStats } = require("@/lib/community-api")
-        const commStats = await getCommunityStats(id)
-
-        if (projectData) {
-          setP({
-            id: projectData._id ?? projectData.id,
-            name: projectData.title ?? "Untitled",
-            domains: projectData.tags ?? [],
-            desc: projectData.description ?? projectData.desc ?? "",
-            stage: projectData.stage ?? "concept",
-            launchedAt: projectData.createdAt ?? null,
-            trustPoints: 75,
-            location: projectData.location ?? "Remote",
-            investmentNeeded: projectData.fundingGoal ?? 0,
-            fundsGained: projectData.fundsGained ?? 0,
-            fundsSpent: projectData.fundsSpent ?? 0,
-            founders: projectData.founders ?? [],
-            uploads: projectData.uploads ?? [],
-            communityTarget: commStats.communityTarget,
-            communityRaised: commStats.communityRaised,
-            pledges: commStats.pledges,
-            communityUpdates: commStats.communityUpdates,
-          })
-        } else {
-          const { getProjectById } = require("@/lib/projects-store")
-          const storeProj = getProjectById(id)
-          if (storeProj) {
-            setP({
-              id: storeProj.id,
-              name: storeProj.name,
-              domains: storeProj.domains,
-              desc: storeProj.desc,
-              stage: storeProj.stage,
-              launchedAt: storeProj.launchedAt,
-              trustPoints: storeProj.trustPoints,
-              location: storeProj.location,
-              investmentNeeded: storeProj.investmentNeeded,
-              fundsGained: storeProj.fundsGained,
-              fundsSpent: storeProj.fundsSpent,
-              founders: storeProj.founders,
-              uploads: storeProj.uploads,
-              communityTarget: commStats.communityTarget,
-              communityRaised: commStats.communityRaised,
-              pledges: commStats.pledges,
-              communityUpdates: commStats.communityUpdates,
-            })
-          } else {
-            setP(null)
-          }
-        }
-      } catch (err) {
-        console.error("Failed to load community details or fallback:", err)
+        // No fallback to the sample projects: a missing or unreachable idea says so.
+        const status = (err as { response?: { status?: number } })?.response?.status
+        if (status !== 404) setLoadError(apiError(err, "Couldn't load this brief."))
         setP(null)
-      } finally {
         setIsLoadingProject(false)
+        return
       }
+
+      setP({
+        id: projectData._id ?? projectData.id,
+        name: projectData.title ?? "Untitled",
+        domains: normalizeList("sectors", projectData.tags ?? []),
+        desc: projectData.description ?? projectData.desc ?? "",
+        stage: projectData.stage ?? "", // unset stays unset (it used to show "Concept")
+        launchedAt: projectData.createdAt ?? null,
+        views: projectData.views ?? 0,
+        likes: projectData.likes ?? 0,
+        comments: projectData.comments ?? 0,
+        founder: projectData.founder ?? (projectData.author ? { name: projectData.author } : null),
+        team: projectData.team ?? [],
+        commitments: projectData.commitments ?? { count: 0, total: 0, released: 0 },
+        raising: projectData.raising ?? "",
+        milestones: (projectData.milestones ?? []).map(toMilestone),
+        files: (projectData.attachments ?? []).map((a: { name: string; url?: string; size?: string; type?: string }) => ({ name: a.name, url: a.url, size: a.size, type: a.type })),
+      })
+      setIsLoadingProject(false)
     }
 
-    fetchProjectAndCommunity()
+    fetchProject()
   }, [id])
 
+  // This investor's own commitment to the idea (for "Committed $X" and milestone releases).
+  const loadMine = useCallback(() => {
+    apiClient
+      .get<{ data: Array<Mine & { ideaId: string }> }>("/investor/portfolio")
+      .then((res) => {
+        const row = res.data.data.find((r) => String(r.ideaId) === id) ?? null
+        setMine(row)
+        setMyCommit(row?.committed ?? null)
+      })
+      .catch(() => { setMine(null); setMyCommit(null) })
+  }, [id])
+
+  const askForUpdate = async () => {
+    try {
+      const res = await apiClient.post<{ sent: boolean }>(`/ideas/${id}/request-update`, {})
+      toast(res.data.sent
+        ? { title: "Asked", description: "The founder sees your request in “Needs you”." }
+        : { title: "Already asked this week", description: "You can ask again next week." })
+    } catch (err) {
+      toast({ title: "Not sent", description: apiError(err, "Please try again."), variant: "destructive" })
+    }
+  }
+
+  // ---- Commit funds: a real amount, a summary and an explicit "no money moves yet" acknowledgement.
+  const { user } = useAuth()
+  const [myCommit, setMyCommit] = useState<number | null>(null)
+  const [mine, setMine] = useState<Mine | null>(null)
+  const [releasing, setReleasing] = useState<ReleaseTarget | null>(null)
+  const [knownMinCheck, setKnownMinCheck] = useState<number | null>(null)
+  const [commitOpen, setCommitOpen] = useState(false)
+  const [commitAmount, setCommitAmount] = useState("")
+  const [commitAck, setCommitAck] = useState(false)
+  const [commitSaving, setCommitSaving] = useState(false)
+  const [commitError, setCommitError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!id) return
+    // Already committed? Show that instead of offering a second commit.
+    loadMine()
+    // Prefill the amount only from a minimum check the investor actually set (not the $5k default).
+    apiClient
+      .get<{ minCheck?: number; knownFields?: string[] }>("/investor/profile")
+      .then((res) => setKnownMinCheck(res.data.knownFields?.includes("minCheck") && res.data.minCheck ? res.data.minCheck : null))
+      .catch(() => setKnownMinCheck(null))
+  }, [id, loadMine])
+
+  // Every hook must run before the early returns below (React rules of hooks).
+
   if (isLoadingProject) {
-    return (
-      <div className="flex items-center justify-center py-24">
-        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-      </div>
-    )
+    return <Page><SkeletonRows /></Page>
   }
 
   if (!p) {
     return (
-      <div className="flex flex-col items-center justify-center py-24 text-center">
-        <h2 className="text-xl font-semibold mb-2">Project not found</h2>
-        <Button onClick={() => router.push("/investor/search")} variant="outline">
-          Back to search
-        </Button>
-      </div>
+      <Page>
+        <PageTitle title={loadError ? "Couldn't load this idea" : "This idea isn't available"}>
+          {loadError ?? "It may have been deleted, or it's still a draft."}
+        </PageTitle>
+        <Link href="/investor/search" className={cn(quietLinkClass, "mt-8 inline-block")}>Back to Discover</Link>
+      </Page>
     )
   }
-
-  const [selectedFounder, setSelectedFounder] = useState<{ name: string; role: string; bio?: string } | null>(null)
 
   const handleStartChat = (founderName: string) => {
     const isGhost = localStorage.getItem("investor_ghost_mode") === "true"
@@ -242,45 +261,38 @@ export default function ProjectBriefPage() {
     router.push(`/investor/chats?activeId=${cleanId}`)
   }
 
-  const handleCommitFunds = async () => {
+  const openCommit = () => {
+    setCommitAmount(knownMinCheck ? String(knownMinCheck) : "")
+    setCommitAck(false)
+    setCommitError(null)
+    setCommitOpen(true)
+  }
+
+  const amountNumber = Number(commitAmount.replace(/[^0-9.]/g, ""))
+  const amountValid = Number.isFinite(amountNumber) && amountNumber >= 1 && amountNumber <= 1e9
+
+  const confirmCommit = async () => {
+    if (!amountValid || !commitAck || commitSaving) return
+    setCommitSaving(true)
+    setCommitError(null)
     try {
-      await apiClient.post("/investor/commit", {
-        ideaId: p.id,
-        amount: p.investmentNeeded
-      })
-    } catch (err: unknown) {
-      console.warn("Commit API failed, saving locally", err)
-      const stored = localStorage.getItem("investor_portfolio")
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let portfolioList: any[] = []
-      if (stored) { try { portfolioList = JSON.parse(stored) } catch { portfolioList = [] } }
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const exists = portfolioList.some((item: any) => item.id === p.id)
-      if (!exists) {
-        localStorage.setItem("investor_portfolio", JSON.stringify([
-          ...portfolioList,
-          {
-            id: p.id, name: p.name, stage: p.stage, location: p.location,
-            trustPoints: p.trustPoints, committed: p.investmentNeeded,
-            released: p.fundsGained, perf: "Good",
-            next: "Milestone 1: Alpha Spec Verification",
-            founders: p.founders.map(f => ({ id: f.id, name: f.name, role: f.role }))
-          }
-        ]))
+      await apiClient.post("/investor/commit", { ideaId: p.id, amount: amountNumber })
+      setMyCommit(amountNumber)
+      // The total under the actions now includes this commitment.
+      setP((cur) => (cur ? { ...cur, commitments: { ...cur.commitments, count: cur.commitments.count + 1, total: cur.commitments.total + amountNumber } } : cur))
+      loadMine()
+      setCommitOpen(false)
+      toast({ title: "Commitment recorded", description: `$${amountNumber.toLocaleString()} to ${p.name}. No money has moved.` })
+    } catch (err) {
+      if ((err as { response?: { status?: number } })?.response?.status === 409) {
+        setCommitError("You've already committed to this idea. It's in your investments.")
+      } else {
+        setCommitError(apiError(err, "Your commitment wasn't recorded. Please try again."))
       }
+    } finally {
+      setCommitSaving(false)
     }
-    alert(`Successfully committed $${p.investmentNeeded.toLocaleString()} to ${p.name} Escrow Pool. Redirecting to investments...`)
-    router.push("/investor/investments")
   }
-
-  const handleRequestUpdate = () => {
-    alert("Simulated: Update request dispatched to the founders.")
-  }
-
-  const tp       = clamp(p.trustPoints, 1, 100)
-  const delta    = tp - 75
-  const deltaStr = delta === 0 ? "0" : delta > 0 ? `+${delta}` : `${delta}`
-  const progress = Math.max(0, Math.min(100, Math.round((p.fundsSpent / Math.max(1, p.fundsGained)) * 100)))
 
   const handleAffixSignature = () => {
     if (!legalName.trim() || !agreedToTerms) return
@@ -289,425 +301,249 @@ export default function ProjectBriefPage() {
     setIsSigningModalOpen(false)
   }
 
+  const founder = p.founder
+
   return (
-    <div className="w-full pt-6 pb-24 px-6 xl:px-10 space-y-12">
+    <Page>
+      <Link href="/investor/search" className={quietLinkClass}>Back to Discover</Link>
 
-      {/* Back button */}
-      <div className="pt-2">
-        <Button
-          onClick={() => router.push("/investor/search")}
-          variant="ghost"
-          className="h-8 rounded-lg text-foreground/60 hover:text-foreground hover:bg-accent -ml-2 text-sm cursor-pointer"
-        >
-          <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />
-          Back to search
-        </Button>
-      </div>
+      {/* The idea's cover, then: the pitch on the left; money, founder and files on the right (xl). */}
+      <IdeaCover id={p.id} sectors={p.domains} className="mt-6 aspect-[21/9] w-full sm:aspect-[32/9]" rounded="rounded-3xl" />
 
-      {/* ── Header ── */}
-      <div>
-        <p className="text-[10px] font-mono uppercase tracking-[0.18em] text-muted-foreground flex items-center gap-2 mb-2">
-          <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: "var(--brand-accent)" }} />
-          Project Brief
-        </p>
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div className="space-y-2">
-            <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-3xl font-serif font-light tracking-tight text-foreground">{p.name}</h1>
-              <Badge variant="secondary" className="bg-accent text-foreground/70 border-border font-mono text-[10px]">
-                {p.stage}
-              </Badge>
-              {p.domains.map((d) => (
-                <Badge key={d} variant="secondary" className="bg-accent/60 text-foreground/60 border-border/60 text-[10px]">
-                  {d}
-                </Badge>
-              ))}
-              <span className="text-xs text-muted-foreground">&middot; {p.location}</span>
-            </div>
-            <p className="text-sm text-muted-foreground max-w-lg leading-relaxed">{p.desc}</p>
-          </div>
-
-          <div className="lg:shrink-0 space-y-2">
-            <div className="text-sm text-foreground/70">
-              Trust <span className="font-semibold text-foreground">{tp}</span>
-              <span className={cn("ml-1 text-xs", delta > 0 ? "text-emerald-500" : delta < 0 ? "text-rose-500" : "text-muted-foreground")}>
-                ({deltaStr})
-              </span>
-            </div>
-            <div className="h-1 w-48 rounded-full bg-border overflow-hidden">
-              <div
-                className="h-1 rounded-full transition-all"
-                style={{ width: `${Math.max(2, (tp / 100) * 100)}%`, background: "var(--brand-accent)" }}
-                aria-label="Trust meter"
+      <Split className="mt-10">
+        <Main>
+          <div>
+            <PageTitle title={p.name} />
+            <div className="mt-5">
+              <IdeaFacts
+                founder={founder?.name}
+                founderAvatar={founder?.avatarUrl}
+                stage={p.stage}
+                raising={p.raising}
+                location={founder?.location}
+                sectors={p.domains}
+                postedAt={p.launchedAt}
+                views={p.views}
+                likes={p.likes}
+                comments={p.comments}
               />
             </div>
+            <p className="mt-8 max-w-[62ch] whitespace-pre-line text-lg leading-relaxed text-foreground/90">{p.desc}</p>
           </div>
-        </div>
-      </div>
 
-      {/* ── Funds ── */}
-      <div>
-        <p className="text-[9px] font-mono uppercase tracking-[0.18em] text-muted-foreground mb-3">Capital</p>
-        <div className="grid gap-px sm:grid-cols-3 border border-border rounded-xl overflow-hidden">
-          <Stat label="Funds gained" value={`$${p.fundsGained.toLocaleString()}`} />
-          <Stat label="Spent"        value={`$${p.fundsSpent.toLocaleString()}`} />
-          <Stat label="Needed"       value={`$${p.investmentNeeded.toLocaleString()}`} />
-        </div>
-        <div className="mt-3">
-          <div className="flex items-center justify-between text-[10px] text-muted-foreground font-mono mb-1.5">
-            <span className="uppercase tracking-wider">Burn rate (spent / gained)</span>
-            <span>{progress}%</span>
-          </div>
-          <div className="h-1 rounded-full bg-border overflow-hidden">
-            <div
-              className="h-1 rounded-full transition-all"
-              style={{ width: `${progress}%`, background: "var(--brand-accent)" }}
-            />
-          </div>
-        </div>
-      </div>
-      
-      {/* ── Community Backing & Announcements ── */}
-      <div className="space-y-4">
-        <div className="rounded-xl border border-border bg-[#0a0b0d]/30 p-5 space-y-4">
-          <div className="flex justify-between items-center">
-            <p className="text-[9px] font-mono uppercase tracking-[0.18em] text-muted-foreground">Community Backing (Founder Pledges)</p>
-            <Badge className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[10px] font-mono px-2 py-0.5 rounded-full">
-              Active Pledges
-            </Badge>
-          </div>
-          <div className="flex justify-between items-baseline">
-            <div className="text-xl font-serif font-light text-foreground">
-              ₹{(p.communityRaised || 0).toLocaleString()} <span className="text-xs text-muted-foreground">pledged of ₹{(p.communityTarget || 25000).toLocaleString()} target</span>
-            </div>
-            <div className="text-xs font-mono text-muted-foreground">
-              {Math.round(((p.communityRaised || 0) / (p.communityTarget || 25000)) * 100)}% Funded
-            </div>
-          </div>
-          <div className="h-1.5 rounded-full bg-border overflow-hidden">
-            <div
-              className="h-1.5 rounded-full transition-all bg-emerald-400"
-              style={{ width: `${Math.min(100, Math.round(((p.communityRaised || 0) / (p.communityTarget || 25000)) * 100))}%` }}
-            />
-          </div>
-        </div>
+          <IdeaUpdates ideaId={p.id} isOwner={false} />
 
-        {p.communityUpdates && p.communityUpdates.length > 0 && (
-          <div className="rounded-xl border border-emerald-500/10 bg-emerald-500/[0.01] p-5 space-y-4">
-            <div className="flex items-center gap-2">
-              <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-400" />
-              <p className="text-[9px] font-mono uppercase tracking-[0.18em] text-emerald-400">Founder Announcements & Validation Stream</p>
-            </div>
-            <div className="space-y-3.5">
-              {p.communityUpdates.map((u: any) => (
-                <div key={u.id} className="border-l border-emerald-500/20 pl-3.5 py-0.5 space-y-1">
-                  <div className="flex justify-between items-center flex-wrap gap-2">
-                    <h4 className="text-xs font-semibold text-foreground/90">{u.title}</h4>
-                    <span className="text-[10px] font-mono text-foreground/35">{u.date}</span>
-                  </div>
-                  <p className="text-xs text-foreground/50 leading-relaxed font-sans font-light">
-                    {u.content}
-                  </p>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
+          <IdeaMilestones
+            ideaId={p.id}
+            milestones={p.milestones}
+            isOwner={false}
+            onChange={() => {}}
+            released={Object.fromEntries((mine?.releases ?? []).filter((r) => r.milestoneId).map((r) => [String(r.milestoneId), r.amount]))}
+            action={(m) =>
+              mine && mine.released < mine.committed && !mine.releases.some((r) => String(r.milestoneId) === m.id) ? (
+                <button
+                  type="button"
+                  onClick={() => setReleasing({ investmentId: mine.id, ideaName: p.name, committed: mine.committed, released: mine.released, milestone: { id: m.id, title: m.title } })}
+                  className="text-sm text-foreground underline-offset-4 hover:underline cursor-pointer"
+                >
+                  Record a release
+                </button>
+              ) : (
+                <span className="text-xs text-muted-foreground">Done</span>
+              )
+            }
+          />
+        </Main>
 
-      {/* ── Uploads (Gated behind Mutual NDA) ── */}
-      <div className="relative">
-        <div className="flex justify-between items-center mb-3">
-          <p className="text-[9px] font-mono uppercase tracking-[0.18em] text-muted-foreground">Founder Uploads</p>
-          <div className="flex items-center gap-1.5 text-[10px] font-mono">
-            {ndaSigned ? (
-              <span className="text-emerald-400 flex items-center gap-1">
-                <CheckCircle className="h-3 w-3" /> NDA Signed & Sealed
-              </span>
+        <Aside>
+          <MoneyPanel
+            className="mt-12 xl:mt-0"
+            rows={[
+              { label: "Committed so far", value: usd(p.commitments.total), tone: "gold" },
+              { label: p.commitments.count === 1 ? "Investor" : "Investors", value: String(p.commitments.count) },
+              ...(mine ? [
+                { label: "Your commitment", value: usd(mine.committed) },
+                { label: "You released", value: usd(mine.released), tone: mine.released > 0 ? ("done" as const) : ("plain" as const) },
+              ] : []),
+            ]}
+            note="No money moves on Something yet: commitments and releases are records."
+          >
+            {myCommit !== null ? (
+              <Link href="/investor/investments" className="inline-flex h-10 shrink-0 items-center whitespace-nowrap rounded-full border border-gold/40 bg-gold-soft px-5 text-[15px] text-gold hover:border-gold/70">
+                In your investments
+              </Link>
             ) : (
-              <span className="text-amber-500 flex items-center gap-1">
-                <Lock className="h-3 w-3" /> Mutual NDA Required
-              </span>
+              <button type="button" onClick={openCommit} className={pillClass}>Commit funds</button>
             )}
-          </div>
-        </div>
+            <button type="button" onClick={askForUpdate} className={quietLinkClass}>Ask for an update</button>
+            {founder && (
+              <button type="button" onClick={() => handleStartChat(founder.name)} className={quietLinkClass}>
+                Message {founder.name.split(" ")[0]}
+              </button>
+            )}
+          </MoneyPanel>
 
-        {/* Uploads list container */}
-        <div className="relative rounded-xl border border-border bg-background/40 overflow-hidden">
-          
-          {/* Blurred/masked overlay if NDA is not signed */}
-          {!ndaSigned && (
-            <div className="absolute inset-0 z-10 backdrop-blur-md bg-background/80 flex flex-col items-center justify-center text-center p-6 space-y-4">
-              <Lock className="h-8 w-8 text-amber-500 stroke-[1.5]" />
-              <div className="space-y-1">
-                <h4 className="text-sm font-semibold text-foreground">Secure mNDA Protected Data</h4>
-                <p className="text-xs text-muted-foreground max-w-sm leading-relaxed">
-                  Pitch decks, technical architecture rooms, and hardware sensor telemetry logs are locked under a cryptographically verified Mutual NDA.
-                </p>
-              </div>
-              <Button
-                onClick={() => setIsSigningModalOpen(true)}
-                className="bg-primary text-primary-foreground hover:opacity-95 text-xs font-semibold px-6 rounded-full cursor-pointer"
-                id="sign-nda-trigger-btn"
-              >
-                Review & Sign Mutual NDA
-              </Button>
-            </div>
+          {founder && (
+            <Section title="Founder">
+              <FounderCard founder={founder} />
+            </Section>
           )}
 
-          <div className={cn("p-6 grid gap-3 sm:grid-cols-2", !ndaSigned && "pointer-events-none")}>
-            {p.uploads.map((u, i) => {
-              if (u.type === "deck" || u.type === "link") {
-                return (
-                  <div key={i} className="flex items-center justify-between gap-3 rounded-xl border border-border bg-background p-4 hover:bg-accent/20 transition-colors">
-                    <div className="flex items-center gap-2 text-sm text-foreground/70 min-w-0">
-                      {u.type === "deck"
-                        ? <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
-                        : <ExternalLink className="h-4 w-4 shrink-0 text-muted-foreground" />
-                      }
-                      <span className="truncate">{u.label}</span>
-                    </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="h-7 rounded-lg border-border/60 text-foreground/60 hover:bg-accent hover:text-foreground bg-transparent text-xs shrink-0 cursor-pointer"
-                      asChild
-                    >
-                      <Link href={u.href || "#"}>Open</Link>
-                    </Button>
-                  </div>
-                )
-              }
-              return (
-                <div key={i} className="rounded-xl border border-border overflow-hidden bg-accent/20">
-                  <img
-                    alt={u.label}
-                    src={u.src || "/placeholder.svg?height=120&width=200&query=project%20image"}
-                    className="h-28 w-full object-cover"
-                  />
-                  <div className="px-4 py-2.5 text-sm text-foreground/70">{u.label}</div>
-                </div>
-              )
-            })}
-          </div>
-        </div>
-      </div>
+          {p.team.filter((m) => !m.isFounder).length > 0 && (
+            <Section title="Team">
+              <ul className="divide-y divide-border">
+                {p.team.map((m, i) => (
+                  <li key={`${m.name}-${i}`} className="flex items-baseline justify-between gap-6 py-3">
+                    <span className="text-[15px]">{m.name}</span>
+                    <span className="truncate text-xs text-muted-foreground">{m.isFounder ? "Founder" : m.role}</span>
+                  </li>
+                ))}
+              </ul>
+            </Section>
+          )}
 
-      {/* ── Founders ── */}
-      <div>
-        <p className="text-[9px] font-mono uppercase tracking-[0.18em] text-muted-foreground mb-3">Founders</p>
-        <div className="rounded-xl border border-border overflow-hidden bg-background/25">
-          {p.founders.map((f, i) => (
-            <div
-              key={f.id}
-              className={cn(
-                "px-5 py-4 flex items-center justify-between gap-3 hover:bg-accent/20 transition-colors",
-                i !== 0 && "border-t border-border/60"
+          <Section title="Files">
+            {p.files.length === 0 ? (
+              <p className="text-[15px] text-muted-foreground">The founder hasn&apos;t attached any files.</p>
+            ) : !ndaSigned ? (
+              <div className="space-y-4">
+                <p className="max-w-[60ch] text-[15px] leading-relaxed text-muted-foreground">
+                  {p.files.length} {p.files.length === 1 ? "file" : "files"}. The founder asks you to agree to keep them confidential before opening them.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => { if (!legalName) setLegalName(user?.name ?? ""); setIsSigningModalOpen(true) }}
+                  className="inline-flex h-10 shrink-0 items-center whitespace-nowrap rounded-full border border-input px-5 text-[15px] text-foreground hover:border-muted-foreground cursor-pointer"
+                >
+                  Read and agree
+                </button>
+              </div>
+            ) : (
+              <ul className="divide-y divide-border border-y border-border">
+                {p.files.map((f, i) => (
+                  <li key={`${f.name}-${i}`} className="flex items-baseline justify-between gap-6 py-4">
+                    <span className="min-w-0">
+                      <span className="block truncate text-[15px]">{f.name}</span>
+                      <span className="block text-xs text-muted-foreground">{[fileKind(f.type), f.size].filter(Boolean).join(", ")}</span>
+                    </span>
+                    {f.url ? (
+                      <a href={assetUrl(f.url)} target="_blank" rel="noopener noreferrer" className={quietLinkClass}>Open</a>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">Not uploaded</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Section>
+
+        </Aside>
+      </Split>
+
+      <ReleaseDialog target={releasing} onClose={() => setReleasing(null)} onDone={() => { setReleasing(null); loadMine() }} />
+
+      {/* Commit dialog */}
+      <Dialog open={commitOpen} onOpenChange={(o) => !commitSaving && setCommitOpen(o)}>
+        <DialogContent className="w-full max-w-md rounded-2xl border-border bg-popover p-8 text-popover-foreground">
+          <DialogHeader className="text-left">
+            <DialogTitle className="text-2xl font-medium">Commit to {p.name}</DialogTitle>
+            <DialogDescription className="text-[15px] text-muted-foreground">
+              This records your intent to invest. No money moves on Something yet.
+            </DialogDescription>
+          </DialogHeader>
+
+          <form className="mt-2 space-y-5" onSubmit={(e) => { e.preventDefault(); confirmCommit() }}>
+            <div className="space-y-2">
+              <label htmlFor="commit-amount" className="block text-[15px] text-foreground">Amount in US dollars</label>
+              <input
+                id="commit-amount"
+                inputMode="numeric"
+                autoFocus
+                placeholder="10000"
+                value={commitAmount}
+                onChange={(e) => setCommitAmount(e.target.value)}
+                className="h-11 w-full rounded-lg border border-input bg-transparent px-3.5 text-base text-foreground placeholder:text-muted-foreground focus:border-muted-foreground focus:outline-none"
+              />
+              {knownMinCheck && commitAmount === String(knownMinCheck) && (
+                <p className="text-xs text-muted-foreground">Filled in from your minimum check.</p>
               )}
-            >
-              <div>
-                <div className="font-medium text-sm text-foreground">{f.name}</div>
-                <div className="text-xs text-muted-foreground font-mono">{f.role}</div>
-              </div>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setSelectedFounder({
-                    name: f.name,
-                    role: f.role,
-                    bio: `${f.name} is a key contributor to this project. Use the profile view to check credentials, or click 'Start chat' to connect.`
-                  })}
-                  className="h-8 rounded-lg border-border/60 text-foreground/60 hover:bg-accent hover:text-foreground bg-transparent text-xs cursor-pointer"
-                >
-                  View profile
-                </Button>
-                <Button
-                  size="sm"
-                  onClick={() => handleStartChat(f.name)}
-                  className="h-8 rounded-lg bg-primary text-primary-foreground hover:opacity-90 text-xs cursor-pointer"
-                >
-                  Start chat
-                </Button>
-              </div>
             </div>
-          ))}
-        </div>
-      </div>
 
-      {/* ── Actions ── */}
-      <div>
-        <p className="text-[9px] font-mono uppercase tracking-[0.18em] text-muted-foreground mb-3">Actions</p>
-        <div className="flex flex-wrap items-center gap-3">
-          <Button 
-            onClick={handleCommitFunds}
-            className="rounded-lg bg-primary text-primary-foreground hover:opacity-90 font-medium cursor-pointer"
-          >
-            Commit funds
-          </Button>
-          <Button
-            variant="outline"
-            onClick={() => {
-              if (!ndaSigned) setIsSigningModalOpen(true)
-            }}
-            disabled={ndaSigned}
-            className="rounded-lg border-border/60 text-foreground/60 hover:bg-accent hover:text-foreground bg-transparent cursor-pointer"
-          >
-            <ShieldCheck className="mr-2 h-4 w-4" />
-            {ndaSigned ? "NDA Signed" : "Request/Sign NDA"}
-          </Button>
-          <Button
-            variant="outline"
-            onClick={handleRequestUpdate}
-            className="rounded-lg border-border/60 text-foreground/60 hover:bg-accent hover:text-foreground bg-transparent cursor-pointer"
-          >
-            Request update
-          </Button>
-        </div>
-      </div>
-
-      <Separator className="bg-border/60" />
-
-      <div className="text-xs text-muted-foreground font-mono">
-        Verified projects display an additional badge after Something review.
-      </div>
-
-      {/* Mutual NDA Signing Dialog */}
-      {isSigningModalOpen && (
-        <Dialog open={isSigningModalOpen} onOpenChange={setIsSigningModalOpen}>
-          <DialogContent className="w-full max-w-lg bg-popover text-popover-foreground border border-border shadow-2xl p-6 rounded-xl">
-            <DialogHeader className="space-y-1.5">
-              <DialogTitle className="font-serif font-light text-xl text-foreground flex items-center gap-2">
-                <ShieldCheck className="h-5 w-5 text-[var(--brand-accent)]" />
-                Mutual Non-Disclosure Agreement
-              </DialogTitle>
-              <DialogDescription className="text-xs text-muted-foreground font-mono">
-                Project Ref: mNDA-{p.id.toUpperCase()}
-              </DialogDescription>
-            </DialogHeader>
-
-            <div className="my-4 bg-accent/20 border border-border/40 p-4 rounded-lg text-xs leading-relaxed text-zinc-400 space-y-3 max-h-[220px] overflow-y-auto font-mono">
-              <p><strong>MUTUAL NON-DISCLOSURE AGREEMENT (mNDA)</strong></p>
-              <p>
-                This Mutual Non-Disclosure Agreement (the &quot;Agreement&quot;) is entered into between the project representative of <strong>{p.name}</strong> (&quot;Disclosing Party&quot;) and the signed verified investor (&quot;Receiving Party&quot;).
+            {amountValid && (
+              <p className="text-[15px] leading-relaxed text-foreground/90">
+                You&apos;re committing ${amountNumber.toLocaleString()} to {p.name}
+                {founder ? <> by {founder.name}</> : null}. They&apos;ll be notified.
               </p>
-              <p>
-                1. <strong>Purpose.</strong> The parties wish to explore a potential business relationship, in connection with which either party may disclose proprietary and confidential information.
-              </p>
-              <p>
-                2. <strong>Confidentiality.</strong> The Receiving Party shall protect and preserve the confidentiality of the Disclosing Party&apos;s data, including patent claims, financial telemetry, milestone releases, and deck materials.
-              </p>
-              <p>
-                3. <strong>Restrictions.</strong> Receiving Party shall not distribute, copy, reverse engineer, or sell any disclosed specifications without explicit consent.
-              </p>
-            </div>
+            )}
 
-            <div className="space-y-4 pt-2">
-              <div className="space-y-1.5">
-                <label className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground block">
-                  Legal Name (Digital Signature)
-                </label>
-                <Input
-                  placeholder="Enter your full legal name..."
-                  value={legalName}
-                  onChange={(e) => setLegalName(e.target.value)}
-                  className="bg-accent/20 border-border text-xs"
-                  id="nda-legal-name-input"
-                />
-              </div>
+            <label className="flex items-start gap-3 text-[15px] leading-relaxed text-muted-foreground cursor-pointer">
+              <input
+                type="checkbox"
+                checked={commitAck}
+                onChange={(e) => setCommitAck(e.target.checked)}
+                className="mt-1 size-4 shrink-0 accent-white"
+              />
+              I understand no money moves yet. This is a commitment, not a payment.
+            </label>
 
-              <div className="flex items-start gap-2.5">
-                <input
-                  type="checkbox"
-                  id="agree-checkbox"
-                  checked={agreedToTerms}
-                  onChange={(e) => setAgreedToTerms(e.target.checked)}
-                  className="mt-1 shrink-0 rounded border-border bg-accent/20 focus:ring-[var(--brand-accent)] accent-[var(--brand-accent)]"
-                />
-                <label htmlFor="agree-checkbox" className="text-[11px] text-muted-foreground leading-relaxed cursor-pointer select-none">
-                  I agree to the terms of this mutual NDA and represent that I am a verified investor.
-                </label>
-              </div>
-            </div>
+            {commitError && <p role="alert" className="text-[15px] text-destructive">{commitError}</p>}
 
-            <div className="flex justify-end gap-2 pt-4 border-t border-border/5">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setIsSigningModalOpen(false)}
-                className="h-8 text-xs rounded-lg border-border/60"
-              >
-                Cancel
-              </Button>
-              <Button
-                size="sm"
-                onClick={handleAffixSignature}
-                disabled={!legalName.trim() || !agreedToTerms}
-                className="h-8 text-xs rounded-lg bg-primary text-primary-foreground hover:opacity-95"
-                id="nda-submit-btn"
-              >
-                Affix Digital Signature
-              </Button>
+            <div className="flex items-center justify-end gap-5 pt-2">
+              <button type="button" disabled={commitSaving} onClick={() => setCommitOpen(false)} className={quietLinkClass}>Cancel</button>
+              <button type="submit" disabled={!amountValid || !commitAck || commitSaving} className={pillClass}>
+                {commitSaving ? "Recording…" : "Confirm"}
+              </button>
             </div>
-          </DialogContent>
-        </Dialog>
-      )}
+          </form>
+        </DialogContent>
+      </Dialog>
 
-      {/* Founder Profile Dialog */}
-      {selectedFounder && (
-        <Dialog open={!!selectedFounder} onOpenChange={(open) => !open && setSelectedFounder(null)}>
-          <DialogContent className="w-full max-w-md bg-[#101113] text-white border-white/5 p-6 rounded-xl">
-            <DialogHeader className="space-y-1.5">
-              <DialogTitle className="font-serif font-light text-xl text-white">
-                {selectedFounder.name}
-              </DialogTitle>
-              <DialogDescription className="text-xs text-white/50 font-mono">
-                {selectedFounder.role}
-              </DialogDescription>
-            </DialogHeader>
-            <div className="py-4 text-sm leading-relaxed text-white/70 font-sans">
-              {selectedFounder.bio}
-            </div>
-            <div className="flex justify-end gap-2 pt-4 border-t border-white/5">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setSelectedFounder(null)}
-                className="h-8 text-xs rounded-lg border-white/10 text-white bg-transparent hover:bg-white/5"
-              >
-                Close
-              </Button>
-              <Button
-                size="sm"
-                onClick={() => {
-                  const name = selectedFounder.name
-                  setSelectedFounder(null)
-                  handleStartChat(name)
-                }}
-                className="h-8 text-xs rounded-lg bg-primary text-primary-foreground hover:opacity-95"
-              >
-                Start Chat
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
-      )}
+      {/* Confidentiality agreement (recorded in this browser for now; see chat/future.md C9) */}
+      <Dialog open={isSigningModalOpen} onOpenChange={setIsSigningModalOpen}>
+        <DialogContent className="w-full max-w-lg rounded-2xl border-border bg-popover p-8 text-popover-foreground">
+          <DialogHeader className="text-left">
+            <DialogTitle className="text-2xl font-medium">Keep {p.name}&apos;s files confidential</DialogTitle>
+            <DialogDescription className="text-[15px] text-muted-foreground">
+              A short mutual non-disclosure agreement between you and {founder?.name ?? "the founder"}.
+            </DialogDescription>
+          </DialogHeader>
 
-    </div>
+          <div className="mt-2 max-h-[220px] space-y-3 overflow-y-auto rounded-lg border border-border p-4 text-sm leading-relaxed text-muted-foreground">
+            <p>You and the founder may share confidential information while you look at a possible investment.</p>
+            <p>You agree to keep what you see here private: the files, figures and plans. You won&apos;t copy, share or sell them without the founder&apos;s consent.</p>
+            <p>This doesn&apos;t cover anything that was already public or that you knew before.</p>
+          </div>
+
+          <div className="mt-5 space-y-4">
+            <div className="space-y-2">
+              <label htmlFor="nda-legal-name-input" className="block text-[15px] text-foreground">Your full legal name</label>
+              <input
+                id="nda-legal-name-input"
+                value={legalName}
+                onChange={(e) => setLegalName(e.target.value)}
+                className="h-11 w-full rounded-lg border border-input bg-transparent px-3.5 text-base text-foreground focus:border-muted-foreground focus:outline-none"
+              />
+            </div>
+            <label className="flex items-start gap-3 text-[15px] leading-relaxed text-muted-foreground cursor-pointer">
+              <input
+                type="checkbox"
+                id="agree-checkbox"
+                checked={agreedToTerms}
+                onChange={(e) => setAgreedToTerms(e.target.checked)}
+                className="mt-1 size-4 shrink-0 accent-white"
+              />
+              I agree to keep these files confidential.
+            </label>
+          </div>
+
+          <div className="mt-6 flex items-center justify-end gap-5">
+            <button type="button" onClick={() => setIsSigningModalOpen(false)} className={quietLinkClass}>Cancel</button>
+            <button type="button" onClick={handleAffixSignature} disabled={!legalName.trim() || !agreedToTerms} className={pillClass} id="nda-submit-btn">
+              Agree and open files
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </Page>
   )
-}
-
-function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
-  return (
-    <div className="bg-card/10 backdrop-blur-xl p-6 hover:bg-card/15 transition-colors">
-      <div className="text-[10px] font-mono uppercase tracking-wider text-muted-foreground mb-1.5">{label}</div>
-      <div className="text-lg font-serif font-light text-foreground tracking-tight">
-        {value}{hint ? <span className="ml-1 text-xs text-muted-foreground">{hint}</span> : null}
-      </div>
-    </div>
-  )
-}
-
-function clamp(n: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, n))
 }
