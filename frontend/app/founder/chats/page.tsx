@@ -114,7 +114,7 @@ export default function FounderChatsPage() {
   const [isLoadingMessages, setIsLoadingMessages] = useState(false)
   const [showMenu, setShowMenu] = useState(false)
   const [isNewChatOpen, setIsNewChatOpen] = useState(false)
-  const [selectedParticipant, setSelectedParticipant] = useState(AVAILABLE_PARTICIPANTS[0].name)
+  const [selectedParticipant, setSelectedParticipant] = useState(AVAILABLE_PARTICIPANTS[0]?.name ?? "")
 
   const handleCreateThread = () => {
     const part = AVAILABLE_PARTICIPANTS.find(p => p.name === selectedParticipant)
@@ -446,13 +446,13 @@ export default function FounderChatsPage() {
       {/* Sleek inline header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-border/[0.03]">
         <div className="flex flex-col gap-1.5">
-          <h2 className="text-2xl font-serif font-light text-foreground leading-tight">Chats & Synchronization</h2>
+          <h2 className="text-2xl font-light text-foreground leading-tight">Chats & Synchronization</h2>
           <p className="text-foreground/40 text-xs font-sans font-light leading-relaxed">Coordinate in real-time with team co-founders, advisory boards, and review committee investors.</p>
         </div>
         <div className="flex gap-2 shrink-0">
           <Button
             onClick={() => setIsNewChatOpen(true)}
-            className="rounded-full text-xs font-semibold px-4.5 py-2 bg-foreground text-background hover:bg-brand-accent hover:text-background transition-all duration-300 active:scale-[0.98] cursor-pointer h-8.5 flex items-center gap-1.5 shrink-0"
+            className="rounded-full text-xs font-semibold px-4.5 py-2 bg-foreground text-background hover:bg-brand-accent hover:text-background transition-all duration-300 cursor-pointer h-8.5 flex items-center gap-1.5 shrink-0"
           >
             <Plus className="h-3.5 w-3.5" />
             New Chat
@@ -479,7 +479,7 @@ export default function FounderChatsPage() {
       <div className="grid lg:grid-cols-[320px_minmax(0,1fr)] gap-8 lg:gap-10">
         {/* Left Side: Threads panel */}
         <section className={cn("lg:block", showOnlyChatOnMobile ? "hidden" : "block")}>
-          <div className="rounded-2xl border border-border/15 bg-card/10 backdrop-blur-xl p-5 flex flex-col h-[600px] lg:h-[700px] shadow-md">
+          <div className="rounded-2xl border border-border/15 bg-card/10 p-5 flex flex-col h-[600px] lg:h-[700px] shadow-md">
             <div className="flex flex-col gap-2 mb-4">
               <div className="relative">
                 <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-foreground/30" />
@@ -507,12 +507,12 @@ export default function FounderChatsPage() {
               {isLoadingThreads && (
                 <div className="p-8 text-center flex flex-col items-center justify-center gap-2">
                   <Loader2 className="h-5 w-5 animate-spin text-brand-accent" />
-                  <span className="text-[11px] text-foreground/40">Loading workspace threads...</span>
+                  <span className="text-xs text-foreground/40">Loading workspace threads...</span>
                 </div>
               )}
               {!isLoadingThreads && filtered.length === 0 && (
                 <div className="p-8 text-center">
-                  <div className="text-xs text-foreground/40 font-mono uppercase tracking-widest">No conversations</div>
+                  <div className="text-xs text-foreground/40">No conversations</div>
                 </div>
               )}
               {!isLoadingThreads &&
@@ -536,7 +536,7 @@ export default function FounderChatsPage() {
                       <div className="relative shrink-0">
                         <div
                           className={cn(
-                            "grid size-9 place-items-center rounded-full text-[11px] font-semibold tracking-wider font-mono",
+                            "grid size-9 place-items-center rounded-full text-xs font-semibold",
                             active
                               ? "bg-brand-accent/10 text-brand-accent"
                               : "bg-foreground/5 text-foreground/60 group-hover:bg-foreground/10"
@@ -551,19 +551,19 @@ export default function FounderChatsPage() {
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center justify-between mb-0.5">
                           <span className="truncate text-xs font-semibold text-foreground/90">{t.name.split("•")[0]?.trim()}</span>
-                          <span className="text-[11px] text-foreground/30 font-mono shrink-0">
+                          <span className="text-xs text-foreground/30 shrink-0">
                             {formatTime(t.lastActive)}
                           </span>
                         </div>
-                        <div className="truncate text-[11px] text-foreground/40 mb-1 group-hover:text-foreground/60 font-sans font-light">
+                        <div className="truncate text-xs text-foreground/40 mb-1 group-hover:text-foreground/60 font-sans font-light">
                           {t.preview}
                         </div>
                         <div className="flex items-center justify-between">
-                          <span className="text-[11px] text-foreground/30 uppercase tracking-[0.1em] font-mono">
+                          <span className="text-xs text-foreground/30">
                             #{t.category}
                           </span>
                           {t.unread > 0 && (
-                            <span className="flex items-center justify-center h-4 min-w-[16px] px-1 text-[11px] font-bold bg-brand-accent text-background rounded-full">
+                            <span className="flex items-center justify-center h-4 min-w-[16px] px-1 text-xs font-bold bg-brand-accent text-background rounded-full">
                               {t.unread}
                             </span>
                           )}
@@ -578,7 +578,7 @@ export default function FounderChatsPage() {
 
         {/* Right Side: Message pane */}
         <section className={cn("lg:block", showOnlyListOnMobile ? "hidden" : "block")}>
-          <div className="rounded-2xl border border-border/15 bg-card/10 backdrop-blur-xl overflow-hidden flex flex-col h-[600px] lg:h-[700px] shadow-md">
+          <div className="rounded-2xl border border-border/15 bg-card/10 overflow-hidden flex flex-col h-[600px] lg:h-[700px] shadow-md">
             {/* Thread Header */}
             <div className="flex h-14 items-center gap-3 px-4 border-b border-border/[0.03] bg-background/10">
               <button
@@ -591,7 +591,7 @@ export default function FounderChatsPage() {
               {activeThread ? (
                 <>
                   <div className="relative">
-                    <div className="grid size-9 place-items-center rounded-full bg-foreground/5 text-foreground/60 text-[11px] font-semibold tracking-wider font-mono">
+                    <div className="grid size-9 place-items-center rounded-full bg-foreground/5 text-foreground/60 text-xs font-semibold">
                       {initials(activeThread.name)}
                     </div>
                     {activeThread.isOnline && (
@@ -602,7 +602,7 @@ export default function FounderChatsPage() {
                     <div className="truncate text-sm font-semibold text-foreground/95 leading-tight">
                       {activeThread.name}
                     </div>
-                    <div className="flex items-center gap-1.5 text-[9.5px] text-foreground/40 mt-0.5">
+                    <div className="flex items-center gap-1.5 text-xs text-foreground/40 mt-0.5">
                       {activeThread.isOnline ? (
                         <>
                           <span className="size-1 rounded-full bg-brand-accent" />
@@ -625,8 +625,8 @@ export default function FounderChatsPage() {
                       <MoreHorizontal className="h-4 w-4" />
                     </button>
                     {showMenu && (
-                      <div className="absolute right-0 top-9 w-40 rounded-lg border border-border bg-[#101113]/95 backdrop-blur shadow-lg p-1.5 z-50">
-                        <div className="text-[11px] uppercase tracking-wider font-mono text-foreground/45 px-2 py-1 select-none">Move Category</div>
+                      <div className="absolute right-0 top-9 w-40 rounded-lg border border-border bg-[#101113]/95 shadow-lg p-1.5 z-50">
+                        <div className="text-xs text-foreground/45 px-2 py-1 select-none">Move Category</div>
                         <button
                           onClick={() => changeThreadCategory("co")}
                           className="w-full text-left text-xs px-2 py-1.5 rounded hover:bg-accent text-foreground/80 hover:text-foreground cursor-pointer"
@@ -650,18 +650,18 @@ export default function FounderChatsPage() {
                   </div>
                 </>
               ) : (
-                <div className="text-[11px] text-foreground/30 uppercase tracking-[0.2em] font-mono">Sync Workspace</div>
+                <div className="text-xs text-foreground/30">Sync Workspace</div>
               )}
             </div>
 
             {/* Ghost Mode Status Banner */}
             {activeThread && activeThread.isGhostMode && (
-              <div className="bg-amber-500/10 border-b border-amber-500/15 px-4 py-2 flex items-center justify-between text-xs text-amber-400 font-mono shrink-0">
+              <div className="bg-amber-500/10 border-b border-amber-500/15 px-4 py-2 flex items-center justify-between text-xs text-amber-400 shrink-0">
                 <span className="flex items-center gap-1.5 flex-1 min-w-0">
-                  <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse shrink-0" />
+                  <span className="h-1.5 w-1.5 rounded-full bg-amber-500 shrink-0" />
                   <span className="truncate">NDA Stealth Mode — This investor is messaging anonymously.</span>
                 </span>
-                <span className="text-[11px] text-amber-500 border border-amber-500/20 px-2 py-0.5 rounded bg-amber-500/5 uppercase tracking-wider shrink-0 font-semibold">
+                <span className="text-xs text-amber-500 border border-amber-500/20 px-2 py-0.5 rounded bg-amber-500/5 shrink-0 font-semibold">
                   Identity Encrypted
                 </span>
               </div>
@@ -676,7 +676,7 @@ export default function FounderChatsPage() {
               {!activeThread && (
                 <div className="grid h-full place-items-center text-center px-4">
                   <div className="space-y-2 max-w-sm">
-                    <div className="text-sm text-foreground/50 font-medium font-serif">Select a conversation</div>
+                    <div className="text-sm text-foreground/50 font-medium">Select a conversation</div>
                     <div className="text-xs text-foreground/30 leading-relaxed font-sans font-light">
                       Choose from cohort co-founders or review board investors to start sharing project updates.
                     </div>
@@ -711,7 +711,7 @@ export default function FounderChatsPage() {
                         </div>
                         <div
                           className={cn(
-                            "flex items-center gap-1.5 text-[11px] font-mono text-foreground/30",
+                            "flex items-center gap-1.5 text-xs text-foreground/30",
                             isYou ? "justify-end" : "justify-start"
                           )}
                         >
@@ -736,9 +736,9 @@ export default function FounderChatsPage() {
                 <div className="flex justify-start">
                   <div className="bg-background/20 border border-border/[0.02] rounded-xl rounded-bl-none px-4 py-3">
                     <div className="flex space-x-1.5 items-center h-3">
-                      <div className="w-1 h-1 bg-brand-accent rounded-full animate-bounce [animation-delay:-0.3s]"></div>
-                      <div className="w-1 h-1 bg-brand-accent rounded-full animate-bounce [animation-delay:-0.15s]"></div>
-                      <div className="w-1 h-1 bg-brand-accent rounded-full animate-bounce"></div>
+                      <div className="w-1 h-1 bg-brand-accent rounded-full [animation-delay:-0.3s]"></div>
+                      <div className="w-1 h-1 bg-brand-accent rounded-full [animation-delay:-0.15s]"></div>
+                      <div className="w-1 h-1 bg-brand-accent rounded-full"></div>
                     </div>
                   </div>
                 </div>
@@ -764,7 +764,7 @@ export default function FounderChatsPage() {
                   }}
                 />
                 <div className="flex items-center justify-between border-t border-border/[0.03] pt-2 px-1">
-                  <span className="text-[11px] text-foreground/30 font-mono tracking-wide">Press Enter to sync</span>
+                  <span className="text-xs text-foreground/30">Press Enter to sync</span>
                   <Button
                     type="submit"
                     size="icon"
@@ -788,9 +788,9 @@ export default function FounderChatsPage() {
 
       {/* New Chat Dialog */}
       <Dialog open={isNewChatOpen} onOpenChange={setIsNewChatOpen}>
-        <DialogContent className="bg-popover/95 backdrop-blur-2xl border border-border/[0.08] text-foreground rounded-2xl max-w-md shadow-2xl p-6">
+        <DialogContent className="bg-popover/95 border border-border/[0.08] text-foreground rounded-2xl max-w-md shadow-2xl p-6">
           <DialogHeader className="border-b border-border/5 pb-3">
-            <DialogTitle className="text-lg font-serif font-light text-foreground">
+            <DialogTitle className="text-lg font-light text-foreground">
               Start a New Chat
             </DialogTitle>
             <DialogDescription className="text-foreground/45 text-xs mt-1">
@@ -800,7 +800,7 @@ export default function FounderChatsPage() {
 
           <div className="space-y-4 py-4">
             <div className="space-y-1.5">
-              <label htmlFor="participant-select" className="text-[11px] text-foreground/50 font-semibold uppercase tracking-wider font-mono block">
+              <label htmlFor="participant-select" className="text-xs text-foreground/50 font-semibold block">
                 Select Contact
               </label>
               <select

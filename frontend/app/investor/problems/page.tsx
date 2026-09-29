@@ -240,11 +240,11 @@ export default function InvestorProblemsPage() {
 
       {/* Header */}
       <div className="space-y-1.5 pb-3 border-b border-border/40 relative z-10">
-        <p className="text-[10px] font-mono uppercase tracking-[0.2em] text-[#E3C27A] flex items-center gap-2 font-bold">
-          <span className="inline-block h-1.5 w-1.5 rounded-full bg-[#E3C27A] animate-pulse" />
+        <p className="text-xs text-[#E3C27A] flex items-center gap-2 font-bold">
+          <span className="inline-block h-1.5 w-1.5 rounded-full bg-[#E3C27A]" />
           Friction Telemetry Feed
         </p>
-        <h1 className="text-3xl font-serif font-light tracking-tight text-foreground leading-tight">
+        <h1 className="text-3xl font-light tracking-tight text-foreground leading-tight">
           Problems Board
         </h1>
         <p className="text-xs text-muted-foreground font-sans max-w-lg mt-0.5">
@@ -258,13 +258,13 @@ export default function InvestorProblemsPage() {
         <div className="md:col-span-8 space-y-6">
           
           {/* Post/Compose Card (Twitter-style box) */}
-          <div className="rounded-2xl border border-border/40 bg-card/60 backdrop-blur-xl p-5 space-y-4 shadow-sm hover:border-border/60 transition duration-300">
+          <div className="rounded-2xl border border-border/40 bg-card/60 p-5 space-y-4 shadow-sm hover:border-border/60 transition duration-300">
             <div className="flex gap-4">
               <Avatar className="h-9 w-9 border border-border/40 shrink-0">
                 {userAvatar ? (
                   <AvatarImage src={userAvatar} className="object-cover" />
                 ) : null}
-                <AvatarFallback className="bg-accent text-[11px] font-bold">{userName.charAt(0)}</AvatarFallback>
+                <AvatarFallback className="bg-accent text-xs font-bold">{userName.charAt(0)}</AvatarFallback>
               </Avatar>
               <div className="flex-1 space-y-3">
                 <Textarea
@@ -280,16 +280,16 @@ export default function InvestorProblemsPage() {
                     placeholder="Add tags (comma separated, e.g. SQLite, Hardware)"
                     value={newTags}
                     onChange={(e) => setNewTags(e.target.value)}
-                    className="h-8 w-2/3 bg-muted/10 border-border/40 focus-visible:ring-0 text-[11px] placeholder:text-muted-foreground/40 rounded-lg text-foreground"
+                    className="h-8 w-2/3 bg-muted/10 border-border/40 focus-visible:ring-0 text-xs placeholder:text-muted-foreground/40 rounded-lg text-foreground"
                   />
                   <div className="flex items-center gap-3">
-                    <span className="text-[10px] font-mono text-muted-foreground/50">
+                    <span className="text-xs text-muted-foreground/50">
                       {280 - newText.length}
                     </span>
                     <Button
                       onClick={handlePostProblem}
                       disabled={!newText.trim()}
-                      className="h-8 text-[11px] font-mono uppercase tracking-wider px-4 rounded-lg bg-foreground text-background hover:bg-foreground/90 disabled:opacity-30 cursor-pointer transition font-bold"
+                      className="h-8 text-xs px-4 rounded-lg bg-foreground text-background hover:bg-foreground/90 disabled:opacity-30 cursor-pointer transition font-bold"
                     >
                       Post Reply
                     </Button>
@@ -313,7 +313,7 @@ export default function InvestorProblemsPage() {
           {/* Feed List */}
           <div className="space-y-4">
             {filtered.length === 0 ? (
-              <div className="p-12 text-center text-xs text-muted-foreground font-mono border border-dashed border-border/60 rounded-xl">
+              <div className="p-12 text-center text-xs text-muted-foreground border border-dashed border-border/60 rounded-xl">
                 No problems posted yet.
               </div>
             ) : (
@@ -321,7 +321,7 @@ export default function InvestorProblemsPage() {
                 <div
                   key={p.id}
                   className={cn(
-                    "rounded-2xl border border-border/15 bg-card/10 backdrop-blur-xl p-8 transition-all duration-300 space-y-6 hover:border-border/35 hover:bg-card/15 hover:shadow-md relative overflow-hidden",
+                    "rounded-2xl border border-border/15 bg-card/10 p-8 transition-all duration-300 space-y-6 hover:border-border/35 hover:bg-card/15 hover:shadow-md relative overflow-hidden",
                     p.flagged && "opacity-60 border-rose-500/10 bg-rose-500/[0.005]"
                   )}
                 >
@@ -331,20 +331,20 @@ export default function InvestorProblemsPage() {
                         {p.avatarUrl ? (
                           <AvatarImage src={p.avatarUrl} className="object-cover" />
                         ) : null}
-                        <AvatarFallback className="bg-accent text-[11px] font-bold">{p.author.charAt(0)}</AvatarFallback>
+                        <AvatarFallback className="bg-accent text-xs font-bold">{p.author.charAt(0)}</AvatarFallback>
                       </Avatar>
                       <div>
                         <div className="flex items-center gap-2">
                           <span className="font-semibold text-xs text-foreground/90 leading-none">{p.author}</span>
-                          <span className="text-[10px] text-muted-foreground/70 font-mono">{p.handle}</span>
+                          <span className="text-xs text-muted-foreground/70">{p.handle}</span>
                         </div>
-                        <p className="text-[9px] text-muted-foreground/50 font-mono mt-1">{p.createdAt}</p>
+                        <p className="text-xs text-muted-foreground/50 mt-1">{p.createdAt}</p>
                       </div>
                     </div>
 
                     <div className="flex items-center gap-1">
                       {p.flagged ? (
-                        <Badge className="bg-rose-500/10 text-rose-400 border border-rose-500/20 text-[9px] font-mono px-2 py-0.5">
+                        <Badge className="bg-rose-500/10 text-rose-400 border border-rose-500/20 text-xs px-2 py-0.5">
                           FLAGGED: REVIEW PENDING
                         </Badge>
                       ) : (
@@ -366,7 +366,7 @@ export default function InvestorProblemsPage() {
                   {/* Tags */}
                   <div className="flex flex-wrap gap-1.5">
                     {p.tags.map(t => (
-                      <Badge key={t} className="bg-muted/30 text-muted-foreground/80 border border-border/30 hover:bg-muted/55 transition text-[9px] font-mono px-2 py-0.5 cursor-pointer">
+                      <Badge key={t} className="bg-muted/30 text-muted-foreground/80 border border-border/30 hover:bg-muted/55 transition text-xs px-2 py-0.5 cursor-pointer">
                         #{t}
                       </Badge>
                     ))}
@@ -374,7 +374,7 @@ export default function InvestorProblemsPage() {
 
                   {/* Vote & Comment Actions */}
                   <div className="flex items-center justify-between border-t border-border/40 pt-3.5">
-                    <div className="flex items-center gap-4 text-xs font-mono text-muted-foreground/60">
+                    <div className="flex items-center gap-4 text-xs text-muted-foreground/60">
                       {/* Voting Pill */}
                       <div className="flex items-center gap-1 bg-muted/20 border border-border/40 rounded-full p-1 shadow-inner">
                         <button
@@ -384,7 +384,7 @@ export default function InvestorProblemsPage() {
                         >
                           <ArrowBigUp className="h-4.5 w-4.5" />
                         </button>
-                        <span className="text-[10px] font-bold text-foreground/75 min-w-[14px] text-center">
+                        <span className="text-xs font-bold text-foreground/75 min-w-[14px] text-center">
                           {p.upvotes - p.downvotes}
                         </span>
                         <button
@@ -409,7 +409,7 @@ export default function InvestorProblemsPage() {
                     <Button
                       variant="ghost"
                       onClick={() => setOpenCommentsId(openCommentsId === p.id ? null : p.id)}
-                      className="h-8 text-[10px] font-mono uppercase tracking-wider text-muted-foreground hover:text-foreground hover:bg-muted/10 px-3 transition cursor-pointer"
+                      className="h-8 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/10 px-3 transition cursor-pointer"
                     >
                       {openCommentsId === p.id ? "Hide Replies" : "View Replies"}
                     </Button>
@@ -417,7 +417,7 @@ export default function InvestorProblemsPage() {
 
                   {/* Expandable Comments/Replies Section */}
                   {openCommentsId === p.id && (
-                    <div className="border-t border-border/40 pt-4 space-y-4 animate-fade-in">
+                    <div className="border-t border-border/40 pt-4 space-y-4">
                       
                       {/* Add Comment input */}
                       <div className="flex gap-2">
@@ -439,16 +439,16 @@ export default function InvestorProblemsPage() {
                       {/* Comments list */}
                       <div className="space-y-3 pl-3 border-l border-border/10">
                         {p.comments.length === 0 ? (
-                          <p className="text-[10px] text-muted-foreground font-mono uppercase tracking-widest py-2">No replies yet.</p>
+                          <p className="text-xs text-muted-foreground py-2">No replies yet.</p>
                         ) : (
                           p.comments.map(c => (
                             <div key={c.id} className="space-y-1 bg-foreground/[0.005] p-2.5 rounded-lg border border-border/[0.02]">
                               <div className="flex items-center justify-between">
                                 <div className="flex items-center gap-1.5">
-                                  <span className="font-semibold text-[11px] text-foreground/80">{c.author}</span>
-                                  <span className="text-[9px] text-muted-foreground font-mono">{c.handle}</span>
+                                  <span className="font-semibold text-xs text-foreground/80">{c.author}</span>
+                                  <span className="text-xs text-muted-foreground">{c.handle}</span>
                                 </div>
-                                <span className="text-[8px] text-muted-foreground font-mono">{c.createdAt}</span>
+                                <span className="text-xs text-muted-foreground">{c.createdAt}</span>
                               </div>
                               <p className="text-xs text-foreground/60 leading-relaxed font-sans">{c.text}</p>
                             </div>
@@ -469,16 +469,16 @@ export default function InvestorProblemsPage() {
         <div className="md:col-span-4 space-y-6">
           
           {/* Active Tags list */}
-          <Card className="bg-card/60 border-border/40 backdrop-blur-xl shadow-sm rounded-2xl">
+          <Card className="bg-card/60 border-border/40 shadow-sm rounded-2xl">
             <CardContent className="p-5 space-y-4">
-              <h3 className="text-[10px] font-mono font-bold uppercase tracking-widest text-[#E3C27A] pb-2 border-b border-border/40">
+              <h3 className="text-xs font-bold text-[#E3C27A] pb-2 border-b border-border/40">
                 Trending Roadblocks
               </h3>
               <div className="flex flex-wrap gap-1.5">
                 <button
                   onClick={() => setSelectedTag(null)}
                   className={cn(
-                    "text-[10px] font-mono rounded-full px-2.5 py-1 border transition-all cursor-pointer",
+                    "text-xs rounded-full px-2.5 py-1 border transition-all cursor-pointer",
                     !selectedTag
                       ? "border-[#E3C27A]/30 bg-[#E3C27A]/10 text-foreground"
                       : "border-border/40 bg-muted/10 text-muted-foreground/80 hover:bg-muted/20 hover:text-foreground"
@@ -491,7 +491,7 @@ export default function InvestorProblemsPage() {
                     key={tag}
                     onClick={() => setSelectedTag(selectedTag === tag ? null : tag)}
                     className={cn(
-                      "text-[10px] font-mono rounded-full px-2.5 py-1 border transition-all cursor-pointer",
+                      "text-xs rounded-full px-2.5 py-1 border transition-all cursor-pointer",
                       selectedTag === tag
                         ? "border-[#E3C27A]/30 bg-[#E3C27A]/10 text-foreground"
                         : "border-border/40 bg-muted/10 text-muted-foreground/80 hover:bg-muted/20 hover:text-foreground"
@@ -505,13 +505,13 @@ export default function InvestorProblemsPage() {
           </Card>
 
           {/* Market Signal Analytics (Business Model Doc Validation Signal) */}
-          <Card className="bg-card/60 border-border/40 backdrop-blur-xl shadow-sm rounded-2xl">
+          <Card className="bg-card/60 border-border/40 shadow-sm rounded-2xl">
             <CardContent className="p-5 space-y-4">
-              <h3 className="text-[10px] font-mono font-bold uppercase tracking-[0.15em] text-[#E3C27A] flex items-center gap-1.5 pb-2 border-b border-border/40">
+              <h3 className="text-xs font-bold text-[#E3C27A] flex items-center gap-1.5 pb-2 border-b border-border/40">
                 <TrendingUp className="h-3.5 w-3.5 text-[#E3C27A]" />
                 Market Validation Signal
               </h3>
-              <p className="text-[10px] text-muted-foreground/70 leading-normal font-sans font-light">
+              <p className="text-xs text-muted-foreground/70 leading-normal font-sans font-light">
                 Real-time upvote velocity and crowd attention across active roadblock sectors.
               </p>
               <div className="space-y-3 pt-1">
@@ -522,7 +522,7 @@ export default function InvestorProblemsPage() {
                   { tag: "P2P History Pruning",   pct: 10, color: "#E2DFD5" }
                 ].map((stat) => (
                   <div key={stat.tag} className="space-y-1">
-                    <div className="flex justify-between items-baseline text-[9px] font-mono">
+                    <div className="flex justify-between items-baseline text-xs">
                       <span className="text-foreground/85">{stat.tag}</span>
                       <span className="font-bold text-muted-foreground">{stat.pct}% velocity</span>
                     </div>
@@ -536,13 +536,13 @@ export default function InvestorProblemsPage() {
           </Card>
 
           {/* Guidelines */}
-          <Card className="bg-card/60 border-border/40 backdrop-blur-xl shadow-sm rounded-2xl">
-            <CardContent className="p-5 text-[11px] text-muted-foreground/80 space-y-3 leading-relaxed font-sans font-light">
-              <h3 className="text-[10px] font-mono font-bold uppercase tracking-wider text-muted-foreground pb-2 border-b border-border/40">
+          <Card className="bg-card/60 border-border/40 shadow-sm rounded-2xl">
+            <CardContent className="p-5 text-xs text-muted-foreground/80 space-y-3 leading-relaxed font-sans font-light">
+              <h3 className="text-xs font-bold text-muted-foreground pb-2 border-b border-border/40">
                 Friction Criteria
               </h3>
               <p>Surfacing roadblock data creates high-conviction deal matches. Investors view active issues to understand validation difficulty.</p>
-              <ul className="list-disc pl-4 space-y-1 font-mono text-[10px] text-muted-foreground/70">
+              <ul className="list-disc pl-4 space-y-1 text-xs text-muted-foreground/70">
                 <li>Zero elevator pitches</li>
                 <li>Character limit of 280</li>
                 <li>Upvotes drive priority scoring</li>
@@ -556,11 +556,11 @@ export default function InvestorProblemsPage() {
 
       {/* Complain/Flag Dialog */}
       {flagModalId && (
-        <div className="fixed inset-0 z-[120] bg-black/75 backdrop-blur-md flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-[120] bg-black/75 flex items-center justify-center p-4">
           <div className="bg-background border border-border p-6 rounded-2xl max-w-sm w-full space-y-4 shadow-2xl">
             <div className="flex items-center gap-2 text-rose-500">
               <AlertTriangle className="h-5 w-5" />
-              <h3 className="font-serif text-base font-semibold text-foreground">Complain/Flag Post</h3>
+              <h3 className=" text-base font-semibold text-foreground">Complain/Flag Post</h3>
             </div>
             <p className="text-xs text-muted-foreground leading-relaxed font-light font-sans">
               Help moderate the community feed. Please provide details of the violation (e.g. spam, plagiarism, offensive language).
@@ -576,14 +576,14 @@ export default function InvestorProblemsPage() {
                 variant="outline"
                 size="sm"
                 onClick={() => { setFlagModalId(null); setFlagReasonText("") }}
-                className="h-8 text-xs font-mono uppercase tracking-wider rounded-lg border-border/40 text-muted-foreground hover:bg-muted/10"
+                className="h-8 text-xs rounded-lg border-border/40 text-muted-foreground hover:bg-muted/10"
               >
                 Cancel
               </Button>
               <Button
                 size="sm"
                 onClick={() => handleFlagProblem(flagModalId)}
-                className="h-8 text-xs font-mono uppercase tracking-wider rounded-lg bg-rose-600 text-white hover:bg-rose-700"
+                className="h-8 text-xs rounded-lg bg-rose-600 text-white hover:bg-rose-700"
               >
                 Submit Flag
               </Button>

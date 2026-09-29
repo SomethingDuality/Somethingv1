@@ -146,14 +146,14 @@ export default function InvestorChatsPage() {
             setThreads(DEFAULT_THREADS)
             const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null
             const qActiveId = params?.get("activeId")
-            setActiveId(prev => qActiveId || prev || DEFAULT_THREADS[0].id)
+            setActiveId(prev => qActiveId || prev || DEFAULT_THREADS[0]?.id || prev)
           }
         } else {
           setThreads(DEFAULT_THREADS)
           localStorage.setItem("investor_threads", JSON.stringify(DEFAULT_THREADS))
           const params = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : null
           const qActiveId = params?.get("activeId")
-          setActiveId(prev => qActiveId || prev || DEFAULT_THREADS[0].id)
+          setActiveId(prev => qActiveId || prev || DEFAULT_THREADS[0]?.id || prev)
         }
       } finally {
         setIsLoadingThreads(false)
@@ -373,7 +373,7 @@ export default function InvestorChatsPage() {
       <div className="grid lg:grid-cols-[320px_minmax(0,1fr)] gap-8 lg:gap-10">
         {/* Threads list */}
         <section className={cn("lg:block", showOnlyChatOnMobile ? "hidden" : "block")}>
-          <div className="rounded-2xl border border-border/15 bg-card/10 backdrop-blur-xl p-5 flex flex-col h-[600px] lg:h-[700px] shadow-md">
+          <div className="rounded-2xl border border-border/15 bg-card/10 p-5 flex flex-col h-[600px] lg:h-[700px] shadow-md">
             <div className="flex items-center gap-2 mb-4">
               <div className="relative flex-1">
                 <Search className="pointer-events-none absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-foreground/40" />
@@ -414,7 +414,7 @@ export default function InvestorChatsPage() {
                   >
                     <div className="flex items-center gap-3">
                       <div className="relative">
-                        <div className="grid size-10 place-items-center rounded-full text-xs font-mono font-bold bg-accent/40 text-foreground">
+                        <div className="grid size-10 place-items-center rounded-full text-xs font-bold bg-accent/40 text-foreground">
                           {t.name.split(" ").map(n => n[0]).join("").substring(0, 2)}
                         </div>
                         {t.isOnline && <div className="absolute -bottom-0.5 -right-0.5 size-3 rounded-full bg-emerald-500 border-2 border-background" />}
@@ -424,12 +424,12 @@ export default function InvestorChatsPage() {
                           <span className="truncate text-xs font-semibold text-foreground/90">{t.name}</span>
                           <div className="flex items-center gap-1.5 ml-2">
                             {t.unreadCount > 0 && (
-                              <span className="flex items-center justify-center min-w-[16px] h-[16px] px-1 text-[11px] font-bold bg-[var(--brand-accent)] text-background rounded-full">{t.unreadCount}</span>
+                              <span className="flex items-center justify-center min-w-[16px] h-[16px] px-1 text-xs font-bold bg-[var(--brand-accent)] text-background rounded-full">{t.unreadCount}</span>
                             )}
-                            <span className="text-[11px] font-mono text-foreground/40 whitespace-nowrap">{formatTime(t.lastActive)}</span>
+                            <span className="text-xs text-foreground/40 whitespace-nowrap">{formatTime(t.lastActive)}</span>
                           </div>
                         </div>
-                        <p className="truncate text-[11px] text-muted-foreground">{t.lastMessagePreview}</p>
+                        <p className="truncate text-xs text-muted-foreground">{t.lastMessagePreview}</p>
                       </div>
                     </div>
                   </button>
@@ -441,30 +441,30 @@ export default function InvestorChatsPage() {
 
         {/* Chat view */}
         <section className={cn("lg:block", showOnlyListOnMobile ? "hidden" : "block")}>
-          <div className="rounded-2xl border border-border/15 bg-card/10 backdrop-blur-xl overflow-hidden flex flex-col h-[600px] lg:h-[700px] shadow-md">
+          <div className="rounded-2xl border border-border/15 bg-card/10 overflow-hidden flex flex-col h-[600px] lg:h-[700px] shadow-md">
             {/* Header */}
             <div className="flex h-14 items-center gap-3 px-3 sm:px-4 border-b border-border/40 bg-sidebar/10">
               <button className="lg:hidden" onClick={() => setActiveId(null)}><ChevronLeft className="h-5 w-5" /></button>
               {activeThread ? (
-                <div className="truncate text-xs font-semibold uppercase tracking-wider font-mono text-foreground/80 flex items-center gap-2">
+                <div className="truncate text-xs font-semibold text-foreground/80 flex items-center gap-2">
                   <span className="h-1.5 w-1.5 rounded-full bg-[var(--brand-accent)]" />
                   {activeThread.name}
                 </div>
               ) : (
-                <div className="px-2 text-sm text-foreground/75 font-mono uppercase tracking-wider text-xs">Sync Channel</div>
+                <div className="px-2 text-sm text-foreground/75 text-xs">Sync Channel</div>
               )}
             </div>
 
             {/* Ghost Mode Status Banner */}
             {activeThread && activeThread.isGhostMode && (
-              <div className="bg-amber-500/10 border-b border-amber-500/15 px-4 py-2 flex items-center justify-between text-xs text-amber-400 font-mono shrink-0">
+              <div className="bg-amber-500/10 border-b border-amber-500/15 px-4 py-2 flex items-center justify-between text-xs text-amber-400 shrink-0">
                 <span className="flex items-center gap-1.5">
-                  <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse" />
+                  <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
                   Ghost Mode Active — anonymized to the founder.
                 </span>
                 <Button 
                   onClick={handleRevealIdentity}
-                  className="h-6 rounded bg-amber-500 text-black border-transparent font-medium hover:bg-amber-400 text-[11px] px-2.5 cursor-pointer flex items-center justify-center shrink-0"
+                  className="h-6 rounded bg-amber-500 text-black border-transparent font-medium hover:bg-amber-400 text-xs px-2.5 cursor-pointer flex items-center justify-center shrink-0"
                 >
                   Reveal Identity
                 </Button>
@@ -481,7 +481,7 @@ export default function InvestorChatsPage() {
                 <div className="grid h-full place-items-center text-center">
                   <div className="space-y-1.5">
                     <MessageSquare className="h-8 w-8 text-muted-foreground/35 mx-auto" />
-                    <p className="text-xs text-muted-foreground font-mono uppercase tracking-widest">No messages yet</p>
+                    <p className="text-xs text-muted-foreground">No messages yet</p>
                   </div>
                 </div>
               ) : (
@@ -494,7 +494,7 @@ export default function InvestorChatsPage() {
                         <div className={cn("rounded-2xl px-4 py-3 text-xs leading-relaxed shadow-sm", isYou ? "bg-primary text-primary-foreground rounded-br-md" : "bg-accent text-foreground rounded-bl-md")}>
                           <p>{m.text}</p>
                         </div>
-                        <div className={cn("flex items-center gap-1 mt-1.5 text-[11px] font-mono", isYou ? "justify-end text-foreground/45" : "text-foreground/45")}>
+                        <div className={cn("flex items-center gap-1 mt-1.5 text-xs", isYou ? "justify-end text-foreground/45" : "text-foreground/45")}>
                           <span>{formatTime(m.createdAt)}</span>
                           {isYou && lastMessage && (
                             m.deliveryStatus === "seen" ? <CheckCheck className="h-3 w-3 text-blue-400" /> :
@@ -531,9 +531,9 @@ export default function InvestorChatsPage() {
 
       {/* New Chat Dialog */}
       <Dialog open={isNewChatOpen} onOpenChange={setIsNewChatOpen}>
-        <DialogContent className="bg-popover/95 backdrop-blur-2xl border border-border/[0.08] text-foreground rounded-2xl max-w-md shadow-2xl p-6">
+        <DialogContent className="bg-popover/95 border border-border/[0.08] text-foreground rounded-2xl max-w-md shadow-2xl p-6">
           <DialogHeader className="border-b border-border/5 pb-3">
-            <DialogTitle className="text-lg font-serif font-light text-foreground">
+            <DialogTitle className="text-lg font-light text-foreground">
               Start a New Chat
             </DialogTitle>
             <DialogDescription className="text-foreground/45 text-xs mt-1">
@@ -543,7 +543,7 @@ export default function InvestorChatsPage() {
 
           <div className="space-y-4 py-4">
             <div className="space-y-1.5">
-              <label htmlFor="participant-select" className="text-[11px] text-foreground/50 font-semibold uppercase tracking-wider font-mono block">
+              <label htmlFor="participant-select" className="text-xs text-foreground/50 font-semibold block">
                 Select Contact
               </label>
               <select
