@@ -1,0 +1,23 @@
+{
+  "_note": "Made-up ideas showing the expected level for Nothing (cached with the rubric). Varied styles, including non-native English. Provisional until the gold set (R13) exists.",
+  "examples": [
+    {
+      "idea": "A founder proposes a WhatsApp credit ledger for neighbourhood shops; the founder states 50 shops use it daily.",
+      "assessment": {"title": "Shops may not keep using it after the first month", "evidence_status": "unverified", "severity": "important",
+        "cites": ["c1"], "cheapest_test": {"text": "Count how many of the 50 shops logged a sale in each of the last four weeks.", "effort": "hours"},
+        "resolution_criteria": "At least 30 of 50 shops active in week four."}
+    },
+    {
+      "idea": "A founder proposes late night food delivery inside hostel; founder states warden is ok with vendor at gate after 10pm.",
+      "assessment": {"title": "Wardens may not allow a vendor at the gate at night", "evidence_status": "unverified", "severity": "blocking",
+        "cites": ["c2"], "cheapest_test": {"text": "Ask two wardens in writing this week, before cooking anything.", "effort": "days"},
+        "resolution_criteria": "Written permission from at least one hostel."}
+    },
+    {
+      "idea": "A founder proposes an offline crop-disease model under 20 MB; a verified repo shows the model running on a phone.",
+      "assessment": {"title": "Accuracy in real fields is unknown", "evidence_status": "unknown", "severity": "important",
+        "cites": [], "cheapest_test": {"text": "Run it on 100 photos from one farm and compare with an agronomist's labels.", "effort": "weeks"},
+        "resolution_criteria": "Agreement with the agronomist on at least 85 of 100 photos."}
+    }
+  ]
+}
