@@ -1,0 +1,9 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "review": "./app/studio.py:review",
+    "memory_write": "./app/studio.py:memory_write",
+    "echo": "./app/studio.py:echo"
+  },
+  "env": ".env"
+}
