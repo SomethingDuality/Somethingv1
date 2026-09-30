@@ -4,11 +4,14 @@ const { Idea }      = require('../models/ideas.model.js');
 const { Like }      = require('../models/likes.model.js');
 const { Comment }   = require('../models/comments.model.js');
 const { IdeaUpdate } = require('../models/ideaUpdate.model.js');
+const { Report }    = require('../models/report.model.js');
+const { TeamInvite } = require('../models/teamInvite.model.js');
 const { Team }      = require('../models/team.model.js');
 const { Portfolio } = require('../models/portfolio.model.js');
 const { BaseUser, Founder, Investor } = require('../models/user.model.js');
 const { pushNotification } = require('./notifications.service.js');
 const cache = require('../utils/cache.js');
+const { purgeAgentForIdeas } = require('../agent/purge.js');
 
 const UPLOADS_DIR = path.join(__dirname, '../../uploads/ideas');
 
@@ -24,11 +27,21 @@ const purgeIdeas = async (ids) => {
 	const ideaIds = ideas.map((i) => i._id);
 	const titleOf = new Map(ideas.map((i) => [String(i._id), i.title]));
 
+	// What the agent stored about these ideas: memory notes, reviews, runs and checkpoints.
+	await purgeAgentForIdeas(ideaIds);
+
+	// Reports about the ideas or their comments go too: the content they point at is gone.
+	const commentIds = (await Comment.find({ postID: { $in: ideaIds } }).select('_id').lean()).map((c) => c._id);
 	await Promise.all([
 		Like.deleteMany({ postID: { $in: ideaIds } }),
-		Comment.deleteMany({ postID: { $in: ideaIds } }),
+		Report.deleteMany({ $or: [
+			{ targetType: 'idea', targetId: { $in: ideaIds } },
+			{ targetType: 'comment', targetId: { $in: commentIds } },
+		] }),
 		IdeaUpdate.deleteMany({ idea_id: { $in: ideaIds } }),
+		TeamInvite.deleteMany({ ideaId: { $in: ideaIds } }),
 	]);
+	await Comment.deleteMany({ postID: { $in: ideaIds } });
 	await cache.del(...ideaIds.map((id) => `comments:v1:${id}`));
 
 	const teams = await Team.find({ idea_id: { $in: ideaIds } }).select('_id').lean();
@@ -51,7 +64,7 @@ const purgeIdeas = async (ids) => {
 			await pushNotification(
 				p.investor_id,
 				`A founder deleted “${titleOf.get(ideaId)}”. Your $${amount} commitment was cancelled; no money had moved.`,
-				{ key: `idea-deleted:${ideaId}:${p.investor_id}` },
+				{ key: `idea-deleted:${ideaId}:${p.investor_id}`, link: '/investor/investments' },
 			);
 		}
 	}

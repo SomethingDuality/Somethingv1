@@ -11,6 +11,8 @@ const { render } = require('../questions/render.js');
 const { toPatch } = require('../questions/writers.js');
 const { applyUpdate, FieldError } = require('../profile/applyUpdate.js');
 const { emit } = require('../events/index.js');
+const { agentJSON } = require('../agent/client.js');
+const { agentQuestion } = require('../questions/selector.js');
 
 const CONTEXTS = new Set(['more', ...Object.keys(bank.contexts)]);
 
@@ -40,8 +42,9 @@ const loadContext = async (userId, role) => {
 		QuestionState.find({ userId }).lean(),
 		QuestionCadence.findOne({ userId }).lean(),
 	]);
-	const stateMap = new Map(states.map((s) => [stateKey(s.questionId, s.entityId), s]));
-	return { user, ideas, states: stateMap, cadence: cadence || {} };
+	const stateMap = new Map(states.filter((s) => s.origin !== 'agent').map((s) => [stateKey(s.questionId, s.entityId), s]));
+	const agentStates = states.filter((s) => s.origin === 'agent');
+	return { user, ideas, states: stateMap, agentStates, cadence: cadence || {} };
 };
 
 const getNext = async (req, res) => {
@@ -59,7 +62,7 @@ const getNext = async (req, res) => {
 		const timezone = tz || ctx.cadence.timezone || 'UTC';
 		const today = localDay(now, timezone);
 		const result = selectNext({ questions: bank.questions, role, user: ctx.user, ideas: ctx.ideas, states: ctx.states,
-			defaults: DEFAULTS[role] || {}, cadence: ctx.cadence, context, now, timezone });
+			agentStates: ctx.agentStates, defaults: DEFAULTS[role] || {}, cadence: ctx.cadence, context, now, timezone });
 
 		if (result.resolveDaily) {
 			await QuestionCadence.updateOne({ userId }, { $set: { 'daily.resolved': true } });
@@ -104,6 +107,63 @@ const getNext = async (req, res) => {
 	}
 };
 
+// An agent confirm (questionId `agent:<confirmId>`), if it is this user's and still open.
+const findAgentQuestion = async (req, res) => {
+	const st = await QuestionState.findOne({ userId: req.user._id, questionId: req.params.id, origin: 'agent' }).lean();
+	if (!st || !['open', 'snoozed'].includes(st.status)) { res.status(404).json({ success: false, message: 'Unknown question' }); return null; }
+	return { q: agentQuestion(st), entityId: st.entityId || null, agent: true };
+};
+
+// Forwards the founder's answer to the agent, which resumes the memory change it was holding.
+const resolveConfirm = async (req, confirmId, choice, value) => {
+	const out = await agentJSON(`/internal/confirms/${encodeURIComponent(confirmId)}/resolve`, {
+		method: 'POST', user: req.user, body: { choice, ...(value && { value: String(value).slice(0, 200) }) },
+	});
+	return out.status;
+};
+
+const answerConfirm = async (req, res, { q, entityId }) => {
+	const v = req.body?.value;
+	const choice = v?.choice;
+	if (!['yes', 'change'].includes(choice) || (choice === 'change' && !String(v.value || '').trim())) {
+		return res.status(400).json({ success: false, message: 'Answer yes, or type what is right' });
+	}
+	try {
+		const status = await resolveConfirm(req, q.id.slice('agent:'.length), choice, v.value);
+		if (status === 404) {
+			await QuestionState.deleteOne({ userId: req.user._id, questionId: q.id, origin: 'agent' });
+			return res.status(410).json({ success: false, message: 'That question has expired' });
+		}
+		if (status >= 400) return res.status(502).json({ success: false, message: 'Could not save that just now. Please try again.' });
+	} catch (err) {
+		return res.status(err.status || 503).json({ success: false, message: 'Could not save that just now. Please try again.' });
+	}
+	await QuestionState.updateOne({ userId: req.user._id, questionId: q.id, origin: 'agent' },
+		{ $set: { status: 'answered', answeredAt: clock(req), answeredVia: 'box', snoozedUntil: null } });
+	await QuestionCadence.updateOne({ userId: req.user._id }, { $set: applyAnswer(), $inc: { 'totals.answered': 1 }, $setOnInsert: { userId: req.user._id } }, { upsert: true });
+	return res.json({ ok: true, saved: { entity: q.entity, entityId, fields: [] } });
+};
+
+// "Not now" snoozes a confirm until tomorrow; "skip" or "never" tells the agent to leave memory as it is.
+const skipConfirm = async (req, res, { q }, mode) => {
+	const now = clock(req);
+	if (mode === 'later') {
+		const cadence = await QuestionCadence.findOne({ userId: req.user._id }).lean();
+		const until = nextLocalMidnight(now, cadence?.timezone || 'UTC');
+		await QuestionState.updateOne({ userId: req.user._id, questionId: q.id, origin: 'agent' },
+			{ $set: { status: 'snoozed', snoozedUntil: until }, $inc: { laterCount: 1 } });
+		return res.json({ ok: true, status: 'snoozed', snoozedUntil: until, pausedUntil: null });
+	}
+	try {
+		const status = await resolveConfirm(req, q.id.slice('agent:'.length), 'skip');
+		if (status >= 400 && status !== 404) return res.status(502).json({ success: false, message: 'Could not save that just now. Please try again.' });
+	} catch (err) {
+		return res.status(err.status || 503).json({ success: false, message: 'Could not save that just now. Please try again.' });
+	}
+	await QuestionState.updateOne({ userId: req.user._id, questionId: q.id, origin: 'agent' }, { $set: { status: 'never', lastSkippedAt: now } });
+	return res.json({ ok: true, status: 'never', snoozedUntil: null, pausedUntil: null });
+};
+
 const findQuestion = (req, res) => {
 	const q = bank.get(req.params.id);
 	if (!q) { res.status(404).json({ success: false, message: 'Unknown question' }); return null; }
@@ -125,6 +185,10 @@ const markDailyResolved = async (userId, q, entityId, now) => {
 };
 
 const answer = async (req, res) => {
+	if (String(req.params.id).startsWith('agent:')) {
+		const found = await findAgentQuestion(req, res);
+		return found ? answerConfirm(req, res, found) : undefined;
+	}
 	const found = findQuestion(req, res);
 	if (!found) return;
 	const { q, entityId } = found;
@@ -159,11 +223,15 @@ const answer = async (req, res) => {
 };
 
 const skip = async (req, res) => {
+	const mode = req.body?.mode;
+	if (!['later', 'skip', 'never'].includes(mode)) return res.status(400).json({ success: false, message: 'mode must be later, skip or never' });
+	if (String(req.params.id).startsWith('agent:')) {
+		const found = await findAgentQuestion(req, res);
+		return found ? skipConfirm(req, res, found, mode) : undefined;
+	}
 	const found = findQuestion(req, res);
 	if (!found) return;
 	const { q, entityId } = found;
-	const mode = req.body?.mode;
-	if (!['later', 'skip', 'never'].includes(mode)) return res.status(400).json({ success: false, message: 'mode must be later, skip or never' });
 	const userId = req.user._id;
 	const now = clock(req);
 

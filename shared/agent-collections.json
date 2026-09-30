@@ -1,0 +1,68 @@
+{
+  "_note": "Every collection the Python agent writes, and how to find a user's or an idea's rows in it. Node's purge (src/agent/purge.js) deletes from all of them on idea or account deletion (P16). The agent's tests fail if app/core/db.py and this file drift.",
+  "collections": {
+    "agent_notes": {
+      "user": "user_id",
+      "idea": "idea_id"
+    },
+    "agent_scopes": {
+      "user": "user_id",
+      "idea": "idea_id"
+    },
+    "agent_memory_decisions": {
+      "user": "user_id",
+      "idea": "idea_id"
+    },
+    "agent_pending_confirms": {
+      "user": "user_id",
+      "idea": "idea_id"
+    },
+    "agent_reviews": {
+      "user": "user_id",
+      "idea": "idea_id"
+    },
+    "agent_runs": {
+      "user": "user_id",
+      "idea": "idea_id"
+    },
+    "agent_run_events": {
+      "user": "user_id",
+      "idea": "idea_id"
+    },
+    "agent_usage": {
+      "user": "user_id"
+    },
+    "agent_events": {
+      "user": "user_id",
+      "idea": "idea_id"
+    },
+    "agent_jobs": {
+      "user": "user_id",
+      "idea": "idea_id"
+    },
+    "agent_chats": {
+      "user": "user_id",
+      "idea": "idea_id"
+    },
+    "agent_quotas": {
+      "user": "user_id"
+    },
+    "agent_matches": {
+      "user": "user_id",
+      "idea": "idea_id"
+    },
+    "agent_match_batches": {
+      "user": "user_id"
+    },
+    "agent_vectors": {
+      "user": "user_id",
+      "idea": "idea_id"
+    },
+    "agent_checkpoints": {
+      "thread": "thread_id"
+    },
+    "agent_checkpoint_writes": {
+      "thread": "thread_id"
+    }
+  }
+}

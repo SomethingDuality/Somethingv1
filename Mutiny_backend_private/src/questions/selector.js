@@ -50,6 +50,26 @@ function eligible({ questions, role, user, ideas = [], states, defaults = {}, no
 		(b.question.priority - a.question.priority) || (a.skipCount - b.skipCount) || (a.bankIndex - b.bankIndex) || (a.order - b.order));
 }
 
+/** An agent confirm as a question the box can render. */
+const agentQuestion = (st) => ({
+	id: st.questionId,
+	type: 'confirm',
+	prompt: st.payload?.prompt || 'Is this right?',
+	roles: ['Founder', 'Investor'],
+	entity: st.entityId ? 'idea' : 'user',
+	fields: [],
+	unlocks: [],
+	priority: 100,
+	agent: true,
+	payload: st.payload || {},
+});
+
+/** Open agent confirms the user can be asked now, oldest first. */
+const openConfirms = (agentStates = [], now) => agentStates
+	.filter((st) => st.status === 'open' || (st.status === 'snoozed' && st.snoozedUntil && new Date(st.snoozedUntil) <= now))
+	.filter((st) => !st.expiresAt || new Date(st.expiresAt) > now)
+	.sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0));
+
 /**
  * Decide what to show.
  *  context undefined → the daily question (at most one per local day, the same one on reload)
@@ -57,9 +77,18 @@ function eligible({ questions, role, user, ideas = [], states, defaults = {}, no
  *  context <feature> → a just-in-time question that unlocks that feature (small daily cap)
  * Returns { pick, reason, claimDaily?, resolveDaily?, nextEligibleAt? }.
  */
-function selectNext({ context, cadence = {}, now, timezone = 'UTC', ...rest }) {
+function selectNext({ context, cadence = {}, now, timezone = 'UTC', agentStates = [], ...rest }) {
 	const today = localDay(now, timezone);
 	const paused = cadence.pausedUntil && new Date(cadence.pausedUntil) > now;
+
+	// R12: a pending agent confirm goes first. It holds back a memory change until the founder
+	// answers, it takes one tap, and it doesn't use up the daily question or the just-in-time cap.
+	// "Take a break" still holds it back unless the user asked for a question.
+	const confirm = openConfirms(agentStates, now)[0];
+	if (confirm && (!paused || context)) {
+		return { pick: { question: agentQuestion(confirm), entityId: confirm.entityId ? String(confirm.entityId) : null, entityLabel: null }, reason: 'confirm' };
+	}
+
 	const candidates = eligible({ now, ...rest });
 
 	if (!context) {
@@ -122,4 +151,4 @@ function applySkip({ state = {}, cadence = {}, mode, now, timezone = 'UTC', isDa
 /** An answer resets the skip streak and lifts any pause. */
 const applyAnswer = () => ({ consecutiveSkips: 0, pausedUntil: null });
 
-module.exports = { selectNext, eligible, applySkip, applyAnswer, isKnown, stateKey };
+module.exports = { selectNext, eligible, applySkip, applyAnswer, isKnown, stateKey, agentQuestion, openConfirms };

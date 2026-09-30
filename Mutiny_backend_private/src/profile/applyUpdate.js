@@ -55,7 +55,7 @@ async function applyUpdate({ userId, role, entity = 'user', entityId, patch, sou
 	).lean();
 	if (!doc) return null;
 	await cache.del(`user_ideas:${userId}`);
-	emit('idea.updated', entityId, { ideaId: String(entityId), changes: patch, source });
+	emit('idea.updated', entityId, { ideaId: String(entityId), founderId: String(userId), changes: patch, source });
 	return doc;
 }
 

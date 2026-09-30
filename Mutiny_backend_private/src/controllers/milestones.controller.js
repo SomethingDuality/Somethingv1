@@ -3,6 +3,7 @@ const { Idea } = require('../models/ideas.model.js');
 const { Portfolio } = require('../models/portfolio.model.js');
 const { pushNotification } = require('../services/notifications.service.js');
 const cache = require('../utils/cache.js');
+const { emit } = require('../events/index.js');
 
 const MAX_MILESTONES = 10;
 const MAX_TITLE = 120;
@@ -82,13 +83,15 @@ const update_milestone = async (req, res) => {
 		}
 		await idea.save();
 		await cache.del(`user_ideas:${idea.founder_id}`);
+		// The agent remembers finished milestones and their proof (memory, later the verifiers).
+		if (justDone) emit('idea.milestone_done', idea._id, { ideaId: String(idea._id), founderId: String(idea.founder_id), milestoneId: String(m._id) });
 
 		if (justDone && !idea.isDraft) {
 			const portfolios = await Portfolio.find({ 'investments.idea_id': idea._id }).select('investor_id').lean();
 			await Promise.all(portfolios.map((p) => pushNotification(
 				p.investor_id,
 				`“${idea.title}” finished “${m.title}”. You can record a release for it.`,
-				{ key: `milestone:${m._id}:${p.investor_id}` },
+				{ key: `milestone:${m._id}:${p.investor_id}`, link: '/investor/investments' },
 			)));
 		}
 		return res.status(200).json(shape(m));

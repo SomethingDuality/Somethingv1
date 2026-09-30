@@ -16,12 +16,15 @@ const questionStateSchema = new mongoose.Schema({
 	snoozedUntil: Date,
 	answeredVia:  { type: String, enum: ['box', 'profile', 'agent'] },
 	lastContext:  String,
-	// Room for the agent phase: confirm questions proposed by the Python service.
+	// Agent confirms (R12): "Stage: Prototype → MVP, right?" proposed by the Python service.
+	// questionId is `agent:<confirmId>`; payload holds the prompt and the two values.
 	origin:       { type: String, enum: ['bank', 'agent'], default: 'bank' },
 	payload:      mongoose.Schema.Types.Mixed,
+	expiresAt:    Date,
 }, { timestamps: true });
 
 questionStateSchema.index({ userId: 1, questionId: 1, entityId: 1 }, { unique: true });
+questionStateSchema.index({ userId: 1, origin: 1, status: 1 });
 
 const QuestionState = mongoose.model('QuestionState', questionStateSchema);
 
