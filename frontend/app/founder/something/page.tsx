@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import Link from "next/link"
 import { ArrowUp, X } from "lucide-react"
 import apiClient from "@/lib/axios"
@@ -10,6 +10,11 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { IdeaCover } from "@/components/visual/idea-cover"
 import { SectorList } from "@/components/visual/idea-card"
 import { markTriedSomething } from "@/lib/first-run"
+import {
+  applyEvent, chatApi, followReview, initialView, reviewsApi,
+  type Progress, type Quota, type Reaction, type ReviewStatus, type ReviewView,
+} from "@/lib/agent-transport"
+import { NothingReply, ReviewProgress, SomethingReply } from "@/components/something/review-replies"
 import { labelFor } from "@/lib/taxonomy"
 import { apiError, cn } from "@/lib/utils"
 
@@ -41,6 +46,18 @@ type Turn = {
   readers: Reader[]
   overlaps: Overlaps | null
   error: string | null
+  /** The real review, when the agent is live. */
+  review: ReviewView | null
+  progress: Progress
+  /** Something's answer when the message wasn't an idea ("hi"). */
+  general: string | null
+  reviewError: string | null
+  lastSeq: number
+  reacting: boolean
+  /** Brought back after a reload: the checks below weren't run for it. */
+  restored?: boolean
+  /** A message to Something about the review above it (no new review, no checks). */
+  chat?: { reply: string | null; error?: string | null }
 }
 type Reader = "something" | "nothing"
 
@@ -96,13 +113,62 @@ export default function SomethingPage() {
   const [readers, setReaders] = useState<Reader[]>(["something", "nothing"])
   const [turns, setTurns] = useState<Turn[]>([])
   const [busy, setBusy] = useState(false)
+  const [live, setLive] = useState<ReviewStatus | null>(null)
+  const [quota, setQuota] = useState<Quota | null>(null)
   const endRef = useRef<HTMLDivElement>(null)
+  const follows = useRef(new Map<number, AbortController>())
+
+  const patch = useCallback((id: number, f: (t: Turn) => Partial<Turn>) => {
+    setTurns((all) => all.map((t) => (t.id === id ? { ...t, ...f(t) } : t)))
+  }, [])
+
+  // Follow a review's stream from `after` until it pauses for the founder, finishes or fails.
+  const follow = useCallback((turnId: number, reviewId: string, after: number) => {
+    follows.current.get(turnId)?.abort()
+    const ctrl = new AbortController()
+    follows.current.set(turnId, ctrl)
+    followReview(reviewId, {
+      after,
+      signal: ctrl.signal,
+      onEvent: (ev) => patch(turnId, (t) => {
+        if (!t.review) return {}
+        const out = applyEvent(t.review, ev)
+        return { review: out.view, ...(out.progress !== undefined && { progress: out.progress }), lastSeq: ev.id ? Number(ev.id) : t.lastSeq }
+      }),
+      onPoll: (view) => patch(turnId, () => ({ review: view, progress: null })),
+    }).finally(() => patch(turnId, () => ({ reacting: false })))
+  }, [patch])
 
   useEffect(() => {
     apiClient.get<SavedIdea[]>("/ideas/user").then((r) => setIdeas(r.data)).catch(() => setIdeas([]))
     apiClient.get<{ profileCompletion?: number }>("/founder/profile").then((r) => setProfileDone(r.data.profileCompletion ?? 0)).catch(() => {})
     apiClient.get<{ joined: boolean }>("/founder/review-waitlist").then((r) => setWaitlist(r.data.joined)).catch(() => setWaitlist(null))
-  }, [])
+    reviewsApi.status().then((st) => {
+      setLive(st)
+      if (st.live && "quota" in st && st.quota) setQuota(st.quota)
+      if (!st.live) return
+      // A review still running or waiting for reactions comes back after a reload.
+      reviewsApi.latest().then((v) => {
+        if (!v || (v.status !== "running" && v.status !== "awaiting_reaction")) return
+        const id = Date.now()
+        setTurns([{ id, text: v.brief?.oneLiner ?? "Your last review", idea: null, readers: v.readers, overlaps: null, error: null,
+          review: v, progress: v.status === "running" ? { stage: "reading", text: "Picking up where it left off." } : null,
+          general: null, reviewError: null, lastSeq: 0, reacting: false, restored: true }])
+        if (v.status === "running") follow(id, v.reviewId, 0)
+        chatApi.history(v.reviewId).then((msgs) => {
+          const pairs: Turn[] = []
+          for (let i = 0; i + 1 < msgs.length; i += 2) {
+            if (msgs[i].role !== "founder" || msgs[i + 1].role !== "something") continue
+            pairs.push({ id: id + i + 1, text: msgs[i].text, idea: null, readers: [], overlaps: null, error: null, review: null, progress: null,
+              general: null, reviewError: null, lastSeq: 0, reacting: false, chat: { reply: msgs[i + 1].text } })
+          }
+          if (pairs.length) setTurns((all) => [...all, ...pairs])
+        }).catch(() => {})
+      }).catch(() => {})
+    })
+    const all = follows.current
+    return () => { all.forEach((c) => c.abort()) }
+  }, [follow])
 
   useEffect(() => {
     if (turns.length) endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })
@@ -110,23 +176,75 @@ export default function SomethingPage() {
 
   const canSend = !busy && (Boolean(picked) || text.trim().length > 0)
 
+  // The newest review on screen: typed text after it goes to Something's chat first.
+  const lastReview = [...turns].reverse().find((t) => t.review && t.review.status !== "failed")?.review ?? null
+
   const send = async () => {
     if (!canSend) return
     const id = Date.now()
-    const turn: Turn = { id, text: picked ? picked.title : text.trim(), idea: picked, readers, overlaps: null, error: null }
-    setTurns((t) => [...t, turn])
-    setBusy(true)
+    const typed = text.trim()
+    const base: Turn = { id, text: picked ? picked.title : typed, idea: picked, readers, overlaps: null, error: null,
+      review: null, progress: null, general: null, reviewError: null, lastSeq: 0, reacting: false }
     markTriedSomething()
-    const body = picked ? { ideaId: picked._id } : { text: text.trim() }
     setText("")
     setPicked(null)
+    if (live?.live && lastReview && !picked) {
+      setTurns((t) => [...t, { ...base, chat: { reply: null } }])
+      setBusy(true)
+      try {
+        const res = await chatApi.turn({ text: typed, reviewId: lastReview.reviewId, ...(lastReview.ideaId ? { ideaId: lastReview.ideaId } : {}) })
+        if (res.kind !== "new_idea") {
+          patch(id, () => ({ chat: { reply: res.reply } }))
+          setBusy(false)
+          return
+        }
+        patch(id, () => ({ chat: undefined }))  // a new pitch: it becomes a review below
+      } catch (err) {
+        patch(id, () => ({ chat: { reply: null, error: apiError(err, "Something couldn't reply just now. Please try again.") } }))
+        setBusy(false)
+        return
+      }
+    } else {
+      setTurns((t) => [...t, base])
+      setBusy(true)
+    }
+    const body = picked ? { ideaId: picked._id } : { text: typed }
+    const review = live?.live ? startReview(id, body, readers, picked?._id ?? null) : Promise.resolve()
     try {
       const res = await apiClient.post<Overlaps>("/founder/overlaps", body)
-      setTurns((t) => t.map((x) => (x.id === id ? { ...x, overlaps: res.data } : x)))
+      patch(id, () => ({ overlaps: res.data }))
     } catch (err) {
-      setTurns((t) => t.map((x) => (x.id === id ? { ...x, error: apiError(err, "Couldn't check right now.") } : x)))
+      patch(id, () => ({ error: apiError(err, "Couldn't check right now.") }))
     } finally {
+      await review
       setBusy(false)
+    }
+  }
+
+  const startReview = async (id: number, body: { ideaId?: string; text?: string }, rs: Reader[], ideaId: string | null) => {
+    patch(id, () => ({ progress: { stage: "reading", text: "Starting." } }))
+    try {
+      const res = await reviewsApi.start({ ...body, readers: rs })
+      if (res.kind === "general") {
+        patch(id, () => ({ general: res.reply, progress: null }))
+        return
+      }
+      setQuota(res.quota)
+      patch(id, () => ({ review: initialView(res.reviewId, rs, ideaId ? "saved_idea" : "typed_text", ideaId) }))
+      follow(id, res.reviewId, 0)
+    } catch (err) {
+      patch(id, () => ({ reviewError: apiError(err, "The review couldn't start. Please try again."), progress: null }))
+    }
+  }
+
+  const react = async (turn: Turn, reaction: Reaction) => {
+    if (!turn.review) return
+    patch(turn.id, () => ({ reacting: true, progress: reaction.kind === "dispute" ? { stage: "rebuttal", text: "Reading your reply." } : null }))
+    try {
+      await reviewsApi.react(turn.review.reviewId, reaction)
+      follow(turn.id, turn.review.reviewId, turn.lastSeq)
+    } catch (err) {
+      patch(turn.id, () => ({ reacting: false, progress: null, reviewError: apiError(err, "That didn't save. Please try again.") }))
     }
   }
 
@@ -153,6 +271,7 @@ export default function SomethingPage() {
       onSend={send}
       busy={busy}
       compact={turns.length > 0}
+      placeholder={live?.live && lastReview ? "Ask Something about this, or describe a new idea" : undefined}
     />
   )
 
@@ -169,9 +288,10 @@ export default function SomethingPage() {
         </div>
         <div className="mt-10">{composer}</div>
         <p className="mt-6 text-center text-xs leading-relaxed text-muted-foreground">
-          Their AI reviews aren&apos;t live yet. Overlaps and Readiness work today.{" "}
+          {live?.live ? <QuotaLine quota={quota} /> : <>Their AI reviews aren&apos;t live yet. Overlaps and Readiness work today.{" "}</>}
           We never use your ideas to build anything of ours, and we delete them when you ask.
         </p>
+        {live?.fakeModels && <FakeModelsNote />}
       </div>
     )
   }
@@ -180,32 +300,43 @@ export default function SomethingPage() {
   return (
     <div className="mx-auto w-full max-w-[760px] pb-48">
       <ol className="space-y-16">
-        {turns.map((turn, index) => (
+        {turns.map((turn, index) => {
+          // A review restored after a reload knows only its idea id: show that idea's name.
+          const idea = turn.idea ?? ideas.find((i) => i._id === turn.review?.ideaId) ?? null
+          return (
           <li key={turn.id} className="space-y-6">
             <div className="flex justify-end">
               <div className="max-w-[85%] rounded-3xl rounded-br-lg bg-surface-2 px-5 py-3.5">
-                {turn.idea && (
+                {idea && (
                   <div className="mb-1.5 flex items-center gap-2 text-xs text-muted-foreground">
-                    <IdeaCover id={turn.idea._id} sectors={turn.idea.tags} className="size-4" rounded="rounded-full" />
+                    <IdeaCover id={idea._id} sectors={idea.tags} className="size-4" rounded="rounded-full" />
                     Your saved idea
                   </div>
                 )}
-                <p className="whitespace-pre-line text-[15px] leading-relaxed">{turn.text}</p>
+                <p className="whitespace-pre-line text-[15px] leading-relaxed">{idea && !turn.idea ? idea.title : turn.text}</p>
               </div>
             </div>
 
-            {turn.readers.map((r) => (
-              <ReaderReply key={r} reader={r} brief={index > 0} waitlist={waitlist} onWaitlist={toggleWaitlist} />
-            ))}
+            {turn.chat ? (
+              <ChatReply turn={turn} />
+            ) : live?.live
+              ? <LiveReaders turn={turn} onReact={(r) => react(turn, r)} />
+              : turn.readers.map((r) => (
+                <ReaderReply key={r} reader={r} brief={index > 0} waitlist={waitlist} onWaitlist={toggleWaitlist} />
+              ))}
 
-            <ChecksReply turn={turn} profileDone={profileDone} />
+            {!turn.chat && <ChecksReply turn={turn} profileDone={profileDone} live={Boolean(live?.live)} />}
           </li>
-        ))}
+          )
+        })}
       </ol>
       <div ref={endRef} />
 
       <div className="fixed inset-x-0 bottom-0 z-30 bg-gradient-to-t from-background from-60% to-transparent pb-6 pt-10 md:pl-56">
-        <div className="mx-auto w-full max-w-[760px] px-5 md:px-12 lg:px-0">{composer}</div>
+        <div className="mx-auto w-full max-w-[760px] px-5 md:px-12 lg:px-0">
+          {composer}
+          {live?.live && quota && <p className="mt-2 text-center text-xs text-muted-foreground"><QuotaLine quota={quota} /></p>}
+        </div>
       </div>
     </div>
   )
@@ -225,6 +356,7 @@ function Composer({
   onSend,
   busy,
   compact,
+  placeholder,
 }: {
   text: string
   setText: (v: string) => void
@@ -237,6 +369,7 @@ function Composer({
   onSend: () => void
   busy: boolean
   compact: boolean
+  placeholder?: string
 }) {
   const ref = useRef<HTMLTextAreaElement>(null)
 
@@ -276,7 +409,7 @@ function Composer({
             rows={compact ? 1 : 3}
             maxLength={2000}
             aria-label="Your idea"
-            placeholder="What are you building?"
+            placeholder={placeholder ?? "What are you building?"}
             className="block w-full resize-none bg-transparent text-[17px] leading-relaxed text-foreground placeholder:text-muted-foreground focus:outline-none"
           />
         )}
@@ -420,15 +553,17 @@ function ReaderReply({ reader, brief, waitlist, onWaitlist }: { reader: Reader; 
   )
 }
 
-function ChecksReply({ turn, profileDone }: { turn: Turn; profileDone: number }) {
+function ChecksReply({ turn, profileDone, live }: { turn: Turn; profileDone: number; live: boolean }) {
   return (
     <Speaker
-      name="Checks that work today"
+      name={live ? "Other checks" : "Checks that work today"}
       color="text-muted-foreground"
       icon={<span className="grid size-9 place-items-center rounded-full bg-surface-2 text-xs text-muted-foreground">✓</span>}
     >
       {turn.error ? (
         <p role="alert" className="text-[15px] text-destructive">{turn.error}</p>
+      ) : turn.restored && !turn.overlaps ? (
+        <p className="text-[15px] text-muted-foreground">Ask again to compare it with the ideas on Something.</p>
       ) : !turn.overlaps ? (
         <p className="text-[15px] text-muted-foreground">Comparing with the ideas on Something…</p>
       ) : (
@@ -527,5 +662,76 @@ function ReadinessBlock({ idea, profileDone }: { idea: SavedIdea; profileDone: n
         </>
       )}
     </section>
+  )
+}
+
+/* ------------------------------------------------------------------------------------------------ */
+
+const readerIcon = (r: Reader) => (
+  <span className={cn("grid size-9 place-items-center rounded-full", READERS[r].soft)}>
+    <Creature size={20} holding={READERS[r].holding} className={READERS[r].color} />
+  </span>
+)
+
+/** The real readers: Nothing's review and Something's reply, plus the one progress line. */
+function LiveReaders({ turn, onReact }: { turn: Turn; onReact: (r: Reaction) => void }) {
+  const v = turn.review
+  if (turn.general) {
+    return <Speaker name="Something" color={READERS.something.color} icon={readerIcon("something")}><p className="text-[15px] leading-relaxed">{turn.general}</p></Speaker>
+  }
+  if (turn.reviewError || v?.status === "failed") {
+    return (
+      <Speaker name="Something and Nothing" color="text-muted-foreground" icon={readerIcon("nothing")}>
+        <p role="alert" className="text-[15px] leading-relaxed text-muted-foreground">
+          {turn.reviewError || v?.error?.message || "The review couldn't finish. Please try again."}
+        </p>
+      </Speaker>
+    )
+  }
+  const waiting = turn.progress?.text || (v?.status === "running" ? "Working on it." : "")
+  return (
+    <>
+      {turn.readers.includes("nothing") && (
+        <Speaker name="Nothing" color={READERS.nothing.color} icon={readerIcon("nothing")}>
+          {v?.nothing ? <NothingReply review={v} busy={turn.reacting} onReact={onReact} /> : <ReviewProgress text={waiting || "Waiting."} />}
+          {v?.nothing && turn.reacting && turn.progress && <div className="mt-3"><ReviewProgress text={turn.progress.text} /></div>}
+        </Speaker>
+      )}
+      {turn.readers.includes("something") && (
+        <Speaker name="Something" color={READERS.something.color} icon={readerIcon("something")}>
+          {v?.something ? <SomethingReply review={v} /> : <ReviewProgress text={turn.readers.includes("nothing") && v?.nothing ? "Writing how to answer it." : waiting || "Waiting."} />}
+        </Speaker>
+      )}
+    </>
+  )
+}
+
+function QuotaLine({ quota }: { quota: Quota | null }) {
+  if (!quota) return null
+  const left = Math.max(0, quota.limit - quota.used)
+  return <>{left === 0 ? "No reviews left today; they come back tomorrow." : `${left} of ${quota.limit} reviews left today.`}{" "}</>
+}
+
+function FakeModelsNote() {
+  return (
+    <p className="mt-2 text-center text-xs text-muted-foreground">
+      Test mode: the replies are scripted placeholders until the review models are switched on.
+    </p>
+  )
+}
+
+/** Something's reply to a message about the review above (the Something chat). */
+function ChatReply({ turn }: { turn: Turn }) {
+  const c = turn.chat
+  return (
+    <Speaker name="Something" color={READERS.something.color} icon={readerIcon("something")}>
+      {c?.error ? (
+        <p role="alert" className="text-[15px] leading-relaxed text-muted-foreground">{c.error}</p>
+      ) : c?.reply ? (
+        <p className="whitespace-pre-line text-[15px] leading-relaxed">{c.reply}</p>
+      ) : (
+        <ReviewProgress text="Writing a reply." />
+      )}
+    </Speaker>
   )
 }

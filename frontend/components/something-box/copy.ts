@@ -1,4 +1,4 @@
-import type { Question } from "@/lib/questions"
+import type { AnswerValue, Question } from "@/lib/questions"
 
 // What Something says in the box. Kept apart from the components so the live view and the
 // history (the same lines, once the user has replied) always read the same.
@@ -28,7 +28,8 @@ export function leadIn(q: Question, { first, name }: { first: boolean; name?: st
 }
 
 /** How the user's answer reads as their reply. */
-export function replyText(q: Question, value: string | string[]) {
+export function replyText(q: Question, value: AnswerValue) {
+  if (!Array.isArray(value) && typeof value === "object") return value.choice === "yes" ? "Yes" : value.value
   const values = Array.isArray(value) ? value : [value]
   const label = (v: string) => q.options?.find((o) => o.value === v)?.label ?? v
   return values.map(label).join(", ")
@@ -39,6 +40,7 @@ export function replyText(q: Question, value: string | string[]) {
  * when a check-in follows, since the check-in names all of them.
  */
 export function ackText(q: Question, n: number, { short = false } = {}) {
+  if (q.type === "confirm") return ["Thanks, noted.", "Got it, I'll remember that.", "Noted, thanks."][n % 3]
   const area = helpedArea(q)
   const word = ["Got it", "Thanks", "Noted"][n % 3]
   return area && !short ? `${word}, that helps with ${inSentence(area)}.` : `${word}.`

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react"
 import Link from "next/link"
+import { IdeaReach } from "@/components/matching/matched-ideas"
 import { useParams, useRouter } from "next/navigation"
 import apiClient, { assetUrl } from "@/lib/axios"
 import { apiError } from "@/lib/utils"
@@ -17,6 +18,9 @@ import { useAuth } from "@/components/auth-provider"
 import { labelFor } from "@/lib/taxonomy"
 import { toast } from "@/components/ui/use-toast"
 import { SkeletonRows } from "@/components/visual/skeleton"
+import { HiddenNotice, ReportButton } from "@/components/community/report-dialog"
+import { SupportButton } from "@/components/community/support-button"
+import { StartChatDialog } from "@/components/chat/start-chat-dialog"
 
 
 
@@ -30,6 +34,8 @@ export interface Attachment {
 }
 
 interface Idea {
+  /** A draft is visible only to its founder and is never matched to anyone. */
+  isDraft?: boolean
   id: string
   founder_id?: string
   title: string
@@ -41,6 +47,7 @@ interface Idea {
   description: string
   lookingFor: string[]
   likes: number
+  supportedByMe?: boolean
   downvotes?: number
   commentsCount: number
   flagged?: boolean
@@ -53,11 +60,16 @@ interface Idea {
   team?: { name: string; role: string; isFounder: boolean }[]
   commitments?: { count: number; total: number; released: number }
   createdAt?: string
+  /** Only sent to the founder, and only when the idea is hidden or removed. */
+  moderation?: { state: "hidden" | "removed" }
 }
 
 interface Comment {
   id: string
   author: string
+  authorId?: string
+  /** Only ever on the viewer's own comment. */
+  hidden?: "hidden" | "removed"
   authorAvatar?: string   // the API doesn't send avatars yet
   text: string
   timestamp: string
@@ -85,20 +97,8 @@ export default function IdeaDetailsPage() {
     }
   }
 
-  const [isCollaborating, setIsCollaborating] = useState(false)
-
-  const handleCollaborate = async () => {
-    if (!id) return
-    setIsCollaborating(true)
-    try {
-      await apiClient.post(`/ideas/${id}/collaborate`)
-      toast({ title: "Request sent", description: "The founder has been notified." })
-    } catch (err) {
-      toast({ title: "Request not sent", description: apiError(err, "Please try again."), variant: "destructive" })
-    } finally {
-      setIsCollaborating(false)
-    }
-  }
+  // "Ask to join" opens a chat request to this idea's founder (community C5).
+  const [joinOpen, setJoinOpen] = useState(false)
 
 
   // No fallback to the sample projects: if the idea can't be loaded, say so and offer Retry.
@@ -141,19 +141,6 @@ export default function IdeaDetailsPage() {
   // Server data lives on the server; this only updates what's on screen.
   const saveIdeaState = (updatedIdea: Idea) => setIdea(updatedIdea)
 
-  const [liking, setLiking] = useState(false)
-  const handleLike = async () => {
-    if (!idea || liking) return
-    setLiking(true)
-    try {
-      const res = await apiClient.post<{ likes: number }>(`/ideas/${id}/like`, {})
-      saveIdeaState({ ...idea, likes: res.data.likes })
-    } catch (err) {
-      toast({ title: "Like not saved", description: apiError(err), variant: "destructive" })
-    } finally {
-      setLiking(false)
-    }
-  }
 
   const handleAddComment = async () => {
     if (!idea || !commentInput.trim()) return
@@ -200,6 +187,8 @@ export default function IdeaDetailsPage() {
       {/* The cover, then: the idea, updates, milestones and comments on the left; money, people and files on the right (xl). */}
       <IdeaCover id={idea.id} sectors={idea.tags} className="mt-6 aspect-[21/9] w-full sm:aspect-[32/9]" rounded="rounded-3xl" />
 
+      {isOwner && <HiddenNotice state={idea.moderation?.state} what="this idea" className="mt-6" />}
+
       <Split className="mt-10">
         <Main>
           <div>
@@ -243,13 +232,19 @@ export default function IdeaDetailsPage() {
             </MoneyPanel>
           ) : (
             <div className="mt-10 flex flex-wrap items-center gap-5 xl:mt-0">
-              <button type="button" onClick={handleCollaborate} disabled={isCollaborating} className={pillClass}>
-                {isCollaborating ? "Sending…" : "Ask to join"}
-              </button>
-              <button type="button" onClick={handleLike} disabled={liking} className={quietLinkClass}>Like</button>
+              <button type="button" onClick={() => setJoinOpen(true)} className={pillClass}>Ask to join</button>
+              <SupportButton
+                ideaId={idea.id}
+                supported={idea.supportedByMe}
+                count={idea.likes}
+                onChange={(next) => setIdea((cur) => (cur ? { ...cur, likes: next.count, supportedByMe: next.supported } : cur))}
+              />
               <button type="button" onClick={handleShareClick} className={quietLinkClass}>Copy link</button>
+              <ReportButton type="idea" id={idea.id} />
             </div>
           )}
+
+          {isOwner && !idea.isDraft && <IdeaReach ideaId={idea.id} />}
 
           {!isOwner && idea.founder && (
             <Section title="Founder">
@@ -321,9 +316,21 @@ export default function IdeaDetailsPage() {
                   <li key={c.id} className="py-5">
                     <div className="flex items-baseline justify-between gap-6">
                       <span className="text-[15px] text-foreground">{c.author || "Someone"}</span>
-                      <span className="text-xs text-muted-foreground">{relativeTime(c.timestamp)}</span>
+                      <span className="flex items-baseline gap-4 text-xs text-muted-foreground">
+                        {relativeTime(c.timestamp)}
+                        {user?.id && c.authorId && String(c.authorId) !== String(user.id) && (
+                          <ReportButton type="comment" id={c.id} className="text-xs" />
+                        )}
+                      </span>
                     </div>
-                    <p className="mt-1.5 max-w-[65ch] text-[15px] leading-relaxed text-foreground/90">{c.text}</p>
+                    <p className={`mt-1.5 max-w-[65ch] text-[15px] leading-relaxed ${c.hidden ? "text-muted-foreground" : "text-foreground/90"}`}>{c.text}</p>
+                    {c.hidden && (
+                      <p className="mt-1.5 text-[13px] text-muted-foreground">
+                        {c.hidden === "hidden"
+                          ? <>Only you can see this comment: it&apos;s hidden while we look at some reports.</>
+                          : <>Only you can see this comment: it was removed because it breaks the community rules.</>}
+                      </p>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -332,6 +339,17 @@ export default function IdeaDetailsPage() {
 
         </Main>
       </Split>
+
+      {!isOwner && (
+        <StartChatDialog
+          open={joinOpen}
+          onOpenChange={setJoinOpen}
+          ideaId={idea.id}
+          ideaTitle={idea.title}
+          founderName={idea.founder?.name || idea.author}
+          role="founder"
+        />
+      )}
     </Page>
   )
 }

@@ -1,7 +1,7 @@
 "use client"
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react"
-import { questionsApi, type NextResponse, type Progress, type Question, type SkipMode } from "@/lib/questions"
+import { questionsApi, type AnswerValue, type NextResponse, type Progress, type Question, type SkipMode } from "@/lib/questions"
 import { useAuth } from "@/components/auth-provider"
 import { toast } from "@/components/ui/use-toast"
 import {
@@ -48,7 +48,7 @@ type BoxContext = {
   /** Goes up by one per saved answer; the creature pops when it changes. */
   savedCount: number
   setOpen: (open: boolean) => void
-  answer: (value: string | string[]) => Promise<void>
+  answer: (value: AnswerValue) => Promise<void>
   skip: (mode: Extract<SkipMode, "later" | "never">) => Promise<void>
   /** Quick replies. Each one becomes the user's line in the conversation. */
   keepGoing: () => Promise<void>
@@ -195,7 +195,7 @@ export function SomethingBoxProvider({ role, children }: { role: "founder" | "in
     ])
   }, [lead, say])
 
-  const answer = useCallback(async (value: string | string[]) => {
+  const answer = useCallback(async (value: AnswerValue) => {
     const q = question
     if (!q) return
     const text = replyText(q, value)

@@ -3,12 +3,12 @@
 import { useEffect, useRef, useState } from "react"
 import { ArrowUp } from "lucide-react"
 import { cn } from "@/lib/utils"
-import type { Question } from "@/lib/questions"
+import type { AnswerValue, Question } from "@/lib/questions"
 
 type Props = {
   question: Question
   saving: boolean
-  onSubmit: (value: string | string[]) => void
+  onSubmit: (value: AnswerValue) => void
 }
 
 // The reply area of the conversation: most answers are one tap on a chip; typed answers use the
@@ -27,6 +27,7 @@ export function QuestionInput({ question: q, saving, onSubmit }: Props) {
   const [picked, setPicked] = useState<string[]>([])
   const [text, setText] = useState("")
   const [custom, setCustom] = useState("")
+  const [correcting, setCorrecting] = useState(false)
   const firstRef = useRef<HTMLButtonElement | HTMLInputElement | HTMLTextAreaElement | null>(null)
   const areaRef = useRef<HTMLTextAreaElement | null>(null)
 
@@ -34,6 +35,7 @@ export function QuestionInput({ question: q, saving, onSubmit }: Props) {
     setPicked([])
     setText("")
     setCustom("")
+    setCorrecting(false)
     firstRef.current?.focus()
   }, [q.id, q.entityId])
 
@@ -48,6 +50,20 @@ export function QuestionInput({ question: q, saving, onSubmit }: Props) {
   const max = q.select?.max ?? 1
   const min = q.select?.min ?? 1
   const setFirst = (i: number) => (i === 0 ? (el: HTMLButtonElement | null) => { firstRef.current = el } : undefined)
+
+  // A confirm: "Yes" is one tap; "Not quite" opens a line to type what's right instead.
+  if (q.type === "confirm" && !correcting) {
+    return (
+      <div className="grid grid-cols-2 gap-2" role="group" aria-label={q.prompt}>
+        <button ref={setFirst(0)} type="button" disabled={saving} onClick={() => onSubmit({ choice: "yes" })} className={cn(chip(false), "h-12")}>
+          Yes
+        </button>
+        <button type="button" disabled={saving} onClick={() => setCorrecting(true)} className={cn(chip(false), "h-12")}>
+          Not quite
+        </button>
+      </div>
+    )
+  }
 
   if (q.type === "yes_no") {
     return (
@@ -139,7 +155,7 @@ export function QuestionInput({ question: q, saving, onSubmit }: Props) {
   const long = q.format === "long"
   const value = text.trim()
   const submitText = () => {
-    if (value && !saving) onSubmit(value)
+    if (value && !saving) onSubmit(q.type === "confirm" ? { choice: "change", value } : value)
   }
   return (
     <form

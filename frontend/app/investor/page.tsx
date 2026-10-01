@@ -8,11 +8,12 @@ import { useAuth } from "@/components/auth-provider"
 import { Aside, Main, Page, PageTitle, Section, Split, countOf, greeting, pillClass, relativeTime, usd } from "@/components/shell/page"
 import { GettingStarted, type Step } from "@/components/shell/getting-started"
 import { IdeaCard } from "@/components/visual/idea-card"
-import { IdeaCover } from "@/components/visual/idea-cover"
 import { MoneyPanel } from "@/components/visual/money-panel"
 import { labelFor, normalizeList } from "@/lib/taxonomy"
 import { apiError } from "@/lib/utils"
+import { LeaderboardCard } from "@/components/community/leaderboard-card"
 import { SkeletonRows } from "@/components/visual/skeleton"
+import { MatchedIdeas } from "@/components/matching/matched-ideas"
 
 type Idea = {
   _id: string
@@ -79,9 +80,6 @@ export default function InvestorHome() {
   // This week's; if there are none, the newest ones so the list is never empty for no reason.
   const thisWeek = inSectors?.filter((i) => i.createdAt && Date.now() - new Date(i.createdAt).getTime() < WEEK_MS) ?? null
   const latest = thisWeek && inSectors ? (thisWeek.length ? thisWeek : inSectors).slice(0, 5) : null
-  const popular = inSectors
-    ? [...inSectors].filter((i) => (i.likes ?? 0) > 0).sort((a, b) => (b.likes ?? 0) - (a.likes ?? 0)).slice(0, 5)
-    : null
 
   const sectorNames = sectors.map((s) => labelFor("sectors", s))
   const where = sectorNames.length
@@ -176,29 +174,13 @@ export default function InvestorHome() {
             )}
           </Section>
 
-          <Section title={sectorNames.length ? "Popular in your sectors" : "Popular"}>
-            {popular === null ? (
-              <SkeletonRows />
-            ) : popular.length === 0 ? (
-              <p className="text-[15px] text-muted-foreground">No likes yet. The most liked ideas show up here.</p>
-            ) : (
-              <ul className="divide-y divide-border">
-                {popular.map((idea) => (
-                  <li key={idea._id}>
-                    <Link href={`/investor/search/${idea._id}`} className="group flex items-center gap-3 py-3">
-                      <IdeaCover id={idea._id} sectors={normalizeList("sectors", idea.tags ?? [])} className="size-10 shrink-0" rounded="rounded-lg" />
-                      <span className="min-w-0 flex-1 truncate text-[15px] group-hover:underline underline-offset-4">{idea.title}</span>
-                      <span className="shrink-0 text-xs text-muted-foreground">{countOf(idea.likes ?? 0, "like")}</span>
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Section>
+          <LeaderboardCard kind="ideas" role="investor" sectors={sectors} title={sectorNames.length ? "Top in your sectors" : "Top ideas"} />
         </Aside>
 
         <Main>
           <GettingStarted steps={steps} />
+
+          <MatchedIdeas role="investor" />
 
           <Section title={latestTitle} action={<Link href="/investor/search" className="hover:text-foreground">See all</Link>}>
             {error ? (
