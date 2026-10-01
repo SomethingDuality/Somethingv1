@@ -1,0 +1,164 @@
+{
+ "labeled_by": "draft",
+ "cases": [
+  {
+   "id": "price-pivot",
+   "steps": [
+    {
+     "text": "Pricing: ₹10 per kilo.",
+     "slot_key": "idea.pricing",
+     "value": "₹10 per kilo",
+     "user_direct": true,
+     "expect_op": "ADD"
+    },
+    {
+     "text": "Pricing: ₹12 per kilo.",
+     "slot_key": "idea.pricing",
+     "value": "₹12 per kilo",
+     "user_direct": true,
+     "expect_op": "INVALIDATE"
+    }
+   ],
+   "expect": {
+    "idea.pricing": "₹12 per kilo"
+   }
+  },
+  {
+   "id": "brainstorm-keeps-entity",
+   "steps": [
+    {
+     "text": "The legal entity: Pvt Ltd in India.",
+     "slot_key": "idea.legal_entity",
+     "value": "Pvt Ltd in India",
+     "user_direct": true,
+     "expect_op": "ADD"
+    },
+    {
+     "text": "What if we incorporated in the UK instead?",
+     "modality": "considering",
+     "expect_op": "ADD_OPTION"
+    }
+   ],
+   "expect": {
+    "idea.legal_entity": "Pvt Ltd in India"
+   }
+  },
+  {
+   "id": "rejected-kept",
+   "steps": [
+    {
+     "text": "We decided not to do subscriptions.",
+     "modality": "rejected",
+     "kind_hint": "decision",
+     "expect_op": "ADD"
+    }
+   ],
+   "expect": {}
+  },
+  {
+   "id": "stage-confirm-yes",
+   "steps": [
+    {
+     "text": "The stage: Prototype.",
+     "slot_key": "idea.stage",
+     "value": "prototype",
+     "user_direct": true,
+     "expect_op": "ADD"
+    },
+    {
+     "text": "The MVP is live now.",
+     "slot_key": "idea.stage",
+     "value": "mvp",
+     "confirm": "yes",
+     "expect_op": "INVALIDATE"
+    }
+   ],
+   "expect": {
+    "idea.stage": "mvp"
+   }
+  },
+  {
+   "id": "stage-confirm-skip",
+   "steps": [
+    {
+     "text": "The stage: Prototype.",
+     "slot_key": "idea.stage",
+     "value": "prototype",
+     "user_direct": true,
+     "expect_op": "ADD"
+    },
+    {
+     "text": "We launched last week.",
+     "slot_key": "idea.stage",
+     "value": "launched",
+     "confirm": "skip",
+     "expect_op": "NOOP"
+    }
+   ],
+   "expect": {
+    "idea.stage": "prototype"
+   }
+  },
+  {
+   "id": "older-news-historical",
+   "steps": [
+    {
+     "text": "Pricing: ₹12 per kilo.",
+     "slot_key": "idea.pricing",
+     "value": "₹12 per kilo",
+     "user_direct": true,
+     "valid_at": "2026-10-01",
+     "expect_op": "ADD"
+    },
+    {
+     "text": "In August we charged ₹8 per kilo.",
+     "slot_key": "idea.pricing",
+     "value": "₹8 per kilo",
+     "valid_at": "2026-08-01",
+     "expect_op": "ADD_HISTORICAL"
+    }
+   ],
+   "expect": {
+    "idea.pricing": "₹12 per kilo"
+   }
+  },
+  {
+   "id": "restatement",
+   "steps": [
+    {
+     "text": "Twelve canteens signed a pilot.",
+     "expect_op": "ADD"
+    },
+    {
+     "text": "Twelve canteens signed a pilot.",
+     "expect_op": "NOOP"
+    }
+   ],
+   "expect": {}
+  },
+  {
+   "id": "verified-beats-claim",
+   "steps": [
+    {
+     "text": "Pricing: ₹10 per kilo (from invoices).",
+     "slot_key": "idea.pricing",
+     "value": "₹10 per kilo",
+     "provenance": "verified_artefact",
+     "source_type": "verifier",
+     "user_direct": true,
+     "expect_op": "ADD"
+    },
+    {
+     "text": "Pricing: ₹99 per kilo.",
+     "slot_key": "idea.pricing",
+     "value": "₹99 per kilo",
+     "user_direct": true,
+     "expect_op": "ADD_CONFLICT"
+    }
+   ],
+   "expect": {
+    "idea.pricing": "₹10 per kilo"
+   }
+  }
+ ]
+}

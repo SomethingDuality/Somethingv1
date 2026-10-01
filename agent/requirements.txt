@@ -1,0 +1,15 @@
+# Pinned runtime dependencies (Python 3.12). langgraph-checkpoint-mongodb 0.5.0 requires pymongo<4.18.
+fastapi==0.142.2
+uvicorn==0.49.0
+langgraph==1.2.12
+langgraph-checkpoint-mongodb==0.5.0
+pymongo==4.17.0
+langchain-core==1.6.6
+langchain-anthropic==1.7.5
+langchain-groq==1.1.3
+langchain-openai==1.6.7
+langchain-google-genai==4.4.0
+pydantic==2.13.5
+pydantic-settings==2.15.0
+httpx==0.28.1
+numpy==2.5.3

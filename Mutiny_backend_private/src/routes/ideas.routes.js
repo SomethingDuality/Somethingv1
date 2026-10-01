@@ -25,7 +25,12 @@ const {
 	delete_comment
 } = require('../controllers/comments.controller.js');
 
-const { protect } = require('../middleware/auth.middleware.js');
+const { protect, optionalAuth } = require('../middleware/auth.middleware.js');
+const { make } = require('../middleware/rateLimits.js');
+
+const commentLimiter = make('comments', { windowMs: 10 * 60 * 1000, limit: 20, byUser: true });
+const { list_updates, post_update, delete_update, request_update } = require('../controllers/updates.controller.js');
+const { add_milestone, update_milestone, delete_milestone } = require('../controllers/milestones.controller.js');
 
 
 
@@ -67,14 +72,14 @@ const uploadAttachment = multer({
 });
 
 
-router.get('/discover',  fetch_discover_ideas);
+router.get('/discover',  optionalAuth, fetch_discover_ideas);
 
 
 router.get('/user',      protect, fetch_user_ideas);
 router.post('/',         protect, create_idea);
 
 
-router.get('/:id',                    fetch_idea_by_id);
+router.get('/:id',                    optionalAuth, fetch_idea_by_id);
 router.put('/:id',                    protect, update_idea);
 router.delete('/:id',                 protect, delete_idea);
 router.post('/:id/like',              protect, like_idea);
@@ -87,10 +92,21 @@ router.delete('/:id/attachments/:filename',   protect, delete_attachment);
 
 router.post('/:id/collaborate',               protect, request_collaboration);
 
+// Founder updates; investors can ask for one (once a week per idea).
+router.get('/:id/updates',                   optionalAuth, list_updates);
+router.post('/:id/updates',                  protect, post_update);
+router.delete('/:id/updates/:updateId',      protect, delete_update);
+router.post('/:id/request-update',           protect, request_update);
 
-router.get('/:id/comments',                   get_comments);
-router.post('/:id/comments',                  protect, add_comment);
-router.put('/comments/:commentId',            protect, update_comment);
+// Milestones (the founder's); investors record releases against done ones.
+router.post('/:id/milestones',               protect, add_milestone);
+router.put('/:id/milestones/:mid',           protect, update_milestone);
+router.delete('/:id/milestones/:mid',        protect, delete_milestone);
+
+
+router.get('/:id/comments',                   optionalAuth, get_comments);
+router.post('/:id/comments',                  protect, commentLimiter, add_comment);
+router.put('/comments/:commentId',            protect, commentLimiter, update_comment);
 router.delete('/comments/:commentId',         protect, delete_comment);
 
 module.exports = router;

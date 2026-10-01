@@ -15,6 +15,8 @@ const likesSchema = new mongoose.Schema({
 
 
 likesSchema.index({ postID: 1, userId: 1 }, { unique: true });
+// This week's leaderboard counts supports by when they were given.
+likesSchema.index({ createdAt: -1 });
 
 const Like = mongoose.model('Like', likesSchema);
 

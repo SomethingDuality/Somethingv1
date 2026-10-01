@@ -18,11 +18,24 @@ const BaseUserSchema = new mongoose.Schema({
 		lowercase: true
 	},
 
+	// Not required for accounts created with Continue with Google.
 	password: {
 		type: String,
-		required: true
+		required: function () { return !this.googleId; }
 	},
 
+	googleId:      { type: String, unique: true, sparse: true },
+	authProviders: [{ type: String, enum: ['password', 'google'] }],
+
+	// Password reset: only the sha256 of the emailed token is stored (see utils/resetToken.util.js).
+	passwordResetTokenHash: { type: String, select: false },
+	passwordResetExpires:   { type: Date,   select: false },
+
+	// Where each user-set value came from: { source: signup|profile|question|google|legacy|agent, at }.
+	// A field with a schema default counts as "known" only once it appears here.
+	fieldSources: { type: Map, of: new mongoose.Schema({ source: String, at: Date }, { _id: false }), default: undefined },
+
+	// Set only by the server. Everything is free for now; signup never reads this from the body.
 	plan: {
 		type: String,
 		enum: ['free', 'something', 'something_pro', 'nothing', 'nothing_pro'],
@@ -47,7 +60,12 @@ const BaseUserSchema = new mongoose.Schema({
 	notifications: [{
 		_id:       { type: mongoose.Schema.Types.ObjectId, default: () => new mongoose.Types.ObjectId() },
 		text:      { type: String, required: true },
-		timestamp: { type: Date,   default: Date.now }
+		timestamp: { type: Date,   default: Date.now },
+		// Idempotency key: the same event replayed never creates a second notification.
+		key:       { type: String },
+		read:      { type: Boolean, default: false },
+		// The in-app page it opens (a path), e.g. the idea it is about.
+		link:      { type: String }
 	}],
 
 	
@@ -101,7 +119,8 @@ const founderSchema = new mongoose.Schema({
 	socials: {
 		linkedin: { type: String, default: '' },
 		twitter:  { type: String, default: '' },
-		website:  { type: String, default: '' }
+		website:  { type: String, default: '' },
+		github:   { type: String, default: '' }
 	},
 
 	skills:    [{ type: String }],
@@ -117,6 +136,11 @@ const founderSchema = new mongoose.Schema({
 
 	
 	
+	// "Tell me when Something and Nothing can review my ideas" (set on the Something page).
+	reviewWaitlist: {
+		joinedAt: { type: Date, default: null },
+	},
+
 	owned_teams: [{
 		type: mongoose.Schema.Types.ObjectId,
 		ref:  'Team'
@@ -158,6 +182,21 @@ const investorSchema = new mongoose.Schema({
 
 	stageFocus: [{ type: String }],
 	publicProfile: { type: Boolean, default: true },
+
+	// P13: an investor asks to be verified with a LinkedIn link; an admin checks it by hand.
+	verification: {
+		status:      { type: String, enum: ['none', 'pending', 'verified', 'rejected'], default: 'none' },
+		linkedin:    { type: String, default: '' },
+		submittedAt: { type: Date, default: null },
+		reviewedAt:  { type: Date, default: null },
+		note:        { type: String, default: '' },
+	},
+
+	// Ghost Mode (C5): founders see "Ghost investor" until the investor shares their name.
+	// On unless the investor turns it off; each chat keeps the setting it started with.
+	ghostMode: { type: Boolean, default: true },
+	// Ideas the investor saved ("Save" in Discover); the first stage of their pipeline.
+	watchlist: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Idea' }],
 	handle: { type: String, default: '' },
 
 	

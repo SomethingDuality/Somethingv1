@@ -1,30 +1,23 @@
 const express = require('express');
 const router  = express.Router();
 
-const {
-	create_team,
-	list_teams,
-	get_team,
-	update_team,
-	delete_team,
-	add_member,
-	remove_member
-} = require('../controllers/team.controller.js');
-
+const c = require('../controllers/team.controller.js');
 const { protect } = require('../middleware/auth.middleware.js');
+const { make } = require('../middleware/rateLimits.js');
 
+// Community plan C6: invites 20/day per founder.
+const inviteLimiter = make('team-invites', { windowMs: 24 * 60 * 60 * 1000, limit: 20, byUser: true });
 
 router.use(protect);
 
-
-router.post('/',    create_team);  
-router.get('/',     list_teams);   
-router.get('/:id',  get_team);     
-router.put('/:id',  update_team);  
-router.delete('/:id', delete_team);  
-
-
-router.post('/:id/members',             add_member);    
-router.delete('/:id/members/:userId',   remove_member); 
+router.get('/mine',                     c.my_teams);
+router.get('/invites',                  c.list_invites);
+router.post('/invites',                 inviteLimiter, c.create_invite);
+router.post('/invites/:id/accept',      c.accept_invite);
+router.post('/invites/:id/decline',     c.decline_invite);
+router.post('/invites/:id/revoke',      c.revoke_invite);
+router.get('/:id',                      c.get_team);
+router.delete('/:id/members/:userId',   c.remove_member);
+router.post('/:id/leave',               c.leave_team);
 
 module.exports = router;

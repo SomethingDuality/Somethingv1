@@ -1,10 +1,19 @@
 import axios from 'axios';
 import type { AxiosResponse, InternalAxiosRequestConfig } from 'axios';
 
+// 5050, not 5000: macOS AirPlay Receiver already listens on 5000.
+export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:5050';
+
 const apiClient = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:5000',
+  baseURL: API_BASE_URL,
   withCredentials: true,
 });
+
+/** Uploaded files are stored as API-relative paths (/uploads/...); absolute URLs (e.g. Google photos) pass through. */
+export function assetUrl(path?: string | null): string | undefined {
+  if (!path) return undefined;
+  return path.startsWith('/uploads/') ? `${API_BASE_URL}${path}` : path;
+}
 
 
 let isRefreshing = false;
@@ -54,14 +63,11 @@ apiClient.interceptors.response.use(
         return apiClient(originalRequest);
       } catch (refreshError) {
         processQueue(refreshError);
-        // Refresh failed — clear stale state and redirect, but only if not already on /login
-        if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
-          localStorage.removeItem('token');
-          localStorage.removeItem('demo_name');
-          localStorage.removeItem('demo_email');
-          localStorage.removeItem('demo_role');
-          localStorage.removeItem('selected_plan');
-          window.location.href = '/login';
+        // Refresh failed: the session is over. Tell AuthProvider and let RequireAuth decide
+        // where to go. Never redirect here — public pages (landing, terms) must stay put
+        // for logged-out visitors.
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new Event('auth:expired'));
         }
         return Promise.reject(refreshError);
       } finally {

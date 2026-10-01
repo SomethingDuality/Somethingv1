@@ -3,69 +3,25 @@
 import type React from "react"
 import { useState, useEffect } from "react"
 import Link from "next/link"
-import apiClient from "@/lib/axios"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Textarea } from "@/components/ui/textarea"
-import { Button } from "@/components/ui/button"
+import apiClient, { assetUrl } from "@/lib/axios"
 import { Switch } from "@/components/ui/switch"
-import { Badge } from "@/components/ui/badge"
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
-import {
-  Building2,
-  Link2,
-  ShieldCheck,
-  Tag,
-  UserRound,
-  Wallet,
-  Loader2,
-  SlidersHorizontal,
-  Plus,
-  Trash2,
-  Users2,
-  Briefcase,
-  Globe2,
-} from "lucide-react"
-import { cn } from "@/lib/utils"
+import { apiError, cn } from "@/lib/utils"
+import { Aside, countOf, Main, Page, PageTitle, pillClass, quietLinkClass, Section, Split } from "@/components/shell/page"
 
 // Shared components
-import { VerificationBadge } from "@/components/verification-badge"
-import { TrustInspector } from "@/components/trust-inspector"
 import { AvatarUploader } from "@/components/avatar-uploader"
 import { useAvatar } from "@/components/avatar-context"
+import { labelFor, list, normalize } from "@/lib/taxonomy"
+import { toast } from "@/components/ui/use-toast"
+import { SkeletonRows } from "@/components/visual/skeleton"
+import { dateLabel } from "@/lib/format"
 
-const PRESET_INTERESTS = ["Climate hardware", "Edge AI", "Local‑first", "Robotics", "Bio tooling", "Privacy", "DePIN"]
-
-const ALL_STAGES = [
-  "Pre‑seed",
-  "Seed",
-  "Series A",
-  "Series B",
-  "Series C",
-  "Growth",
-  "Venture Debt",
-  "Angel",
-  "Grants",
-  "Non‑dilutive"
-]
-
-const PRESET_STRUCTURES = [
-  "US Delaware C-Corp",
-  "Singapore PTE LTD",
-  "Cayman Foundation",
-  "UK Limited",
-  "German GmbH",
-  "Estonian Entity"
-]
-
-const ALL_SUPERPOWERS = [
-  "Technical Recruitment",
-  "Enterprise Sales Intros",
-  "SEC/Regulatory Guidance",
-  "Dev Rel & Growth",
-  "PR & Communications",
-  "Follow-on Syndication"
-]
+// Lists come from shared/taxonomy.json. State holds ids; the UI shows labels.
+const PRESET_INTERESTS = list("sectors").map((e) => e.id)
+const ALL_STAGES = list("fundingStages").map((e) => e.id)
+const PRESET_STRUCTURES = list("legalStructures").map((e) => e.id)
+const ALL_SUPERPOWERS = list("superpowers").map((e) => e.id)
+const ALL_VEHICLES = list("vehicles").map((e) => e.id)
 
 type TechnicalPreferenceValue = "yes" | "maybe" | "no"
 type LeadStatus = "lead" | "follow" | "both"
@@ -117,46 +73,23 @@ type InvestorProfile = {
   // Extended Matchmaking & Syndicate Details
   leadStatus?: LeadStatus
   legalStructures?: string[]
-  vehicles?: ("Direct Fund" | "SPV" | "Syndicate" | "Venture Debt")[]
+  vehicles?: string[]
+  knownFields?: string[]
   superpowers?: string[]
   coInvestors?: string[]
   totalCapitalPool?: number
+  linkedin?: string
+  verification?: Verification
 }
 
-const DEFAULT_PROFILE: InvestorProfile = {
-  name: "",
-  firm: "",
-  minCheck: 5000,
-  maxCheck: 50000,
-  bio: "",
-  interests: [],
-  escrowPreference: "yes",
-  ndaPreference: "yes",
-  openSourcePreference: "maybe",
-  hardwarePreference: "maybe",
-  cryptographyPreference: "yes",
-  pacePerQuarter: 1,
-  stageFocus: [],
-  publicProfile: true,
-  handle: "",
-  trust: 0,
-  trustBreakdown: {
-    ndas: 0,
-    escrowReleases: 0,
-    receipts: 0,
-    history: 0
-  },
-  links: [],
-  portfolio: [],
-  customMatchKeywords: [],
-  notes: [],
-  leadStatus: "both",
-  legalStructures: [],
-  vehicles: [],
-  superpowers: [],
-  coInvestors: [],
-  totalCapitalPool: 0
+type Verification = {
+  status: "none" | "pending" | "verified" | "rejected"
+  linkedin: string
+  submittedAt: string | null
+  reviewedAt: string | null
+  note: string
 }
+
 
 export default function InvestorProfilePage() {
   const { avatarUrl, setAvatarUrl, userName, setUserName } = useAvatar()
@@ -195,10 +128,11 @@ export default function InvestorProfilePage() {
   // Extended Matchmaking Fields
   const [leadStatus, setLeadStatus] = useState<LeadStatus>("both")
   const [legalStructures, setLegalStructures] = useState<string[]>([])
-  const [vehicles, setVehicles] = useState<("Direct Fund" | "SPV" | "Syndicate" | "Venture Debt")[]>([])
+  const [vehicles, setVehicles] = useState<string[]>([])
   const [superpowers, setSuperpowers] = useState<string[]>([])
   const [coInvestors, setCoInvestors] = useState<string[]>([])
-  const [totalCapitalPool, setTotalCapitalPool] = useState(1000000)
+  // Empty until the investor enters one: the server's $1M default is not their answer.
+  const [pool, setPool] = useState("")
 
   // Input fields for adding custom tags
   const [newSectorInput, setNewSectorInput] = useState("")
@@ -206,42 +140,23 @@ export default function InvestorProfilePage() {
   const [newStructureInput, setNewStructureInput] = useState("")
   const [newCoInvestorInput, setNewCoInvestorInput] = useState("")
 
-  const [accreditedVerified, setAccreditedVerified] = useState(false)
-  const [isVerificationOpen, setIsVerificationOpen] = useState(false)
-  const [verifyCriteria, setVerifyCriteria] = useState("networth")
 
-  // Fetch profile on mount
+  // Fetch profile on mount, and again when the Something box saves an answer.
   useEffect(() => {
     fetchProfile()
+    const onUpdate = () => { fetchProfile() }
+    window.addEventListener("profile:updated", onUpdate)
+    return () => window.removeEventListener("profile:updated", onUpdate)
   }, [])
 
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      setAccreditedVerified(localStorage.getItem("investor_accredited_verified") === "true")
-    }
-  }, [])
-
-  const handleVerifyAccreditation = () => {
-    localStorage.setItem("investor_accredited_verified", "true")
-    setAccreditedVerified(true)
-    setIsVerificationOpen(false)
-    alert("SEC Rule 506(c) Accreditation Certified successfully.")
-  }
-
+  // The snapshot reads the same source as the Investments page (no local copy).
   const [portfolioList, setPortfolioList] = useState<Array<{ id: string; name: string }>>([])
   useEffect(() => {
-    const localPortfolio = localStorage.getItem("investor_portfolio")
-    if (localPortfolio) {
-      try {
-        const parsed = JSON.parse(localPortfolio)
-        setPortfolioList(parsed.map((item: any) => ({ id: item.id, name: item.name })))
-      } catch {
-        setPortfolioList([])
-      }
-    } else if (profile) {
-      setPortfolioList(profile.portfolio)
-    }
-  }, [profile])
+    apiClient
+      .get<{ data: Array<{ ideaId: string; name: string }> }>("/investor/portfolio")
+      .then((res) => setPortfolioList((res.data.data || []).map((r) => ({ id: r.ideaId, name: r.name }))))
+      .catch(() => setPortfolioList([]))
+  }, [])
 
   // Sync local state with profile
   useEffect(() => {
@@ -299,10 +214,10 @@ export default function InvestorProfilePage() {
       // Sync Extended parameters
       setLeadStatus(profile.leadStatus || "both")
       setLegalStructures(profile.legalStructures || [])
-      setVehicles(profile.vehicles || ["Direct Fund"])
+      setVehicles(profile.vehicles || [])
       setSuperpowers(profile.superpowers || [])
       setCoInvestors(profile.coInvestors || [])
-      setTotalCapitalPool(profile.totalCapitalPool || 1000000)
+      setPool(profile.knownFields?.includes("totalCapitalPool") && profile.totalCapitalPool ? String(profile.totalCapitalPool) : "")
     }
   }, [profile, setUserName])
 
@@ -313,151 +228,89 @@ export default function InvestorProfilePage() {
       const response = await apiClient.get<InvestorProfile>("/investor/profile")
       setProfile(response.data)
     } catch (err) {
-      console.warn("Failed to fetch API investor profile, using localStorage fallback:", err)
-      const stored = localStorage.getItem("investor_profile_data")
-      if (stored) {
-        try {
-          setProfile(JSON.parse(stored))
-        } catch {
-          setProfile(DEFAULT_PROFILE)
-          localStorage.setItem("investor_profile_data", JSON.stringify(DEFAULT_PROFILE))
-        }
-      } else {
-        const demoName = localStorage.getItem("demo_name")
-        const initialProfile = demoName ? { ...DEFAULT_PROFILE, name: demoName } : DEFAULT_PROFILE
-        setProfile(initialProfile)
-        localStorage.setItem("investor_profile_data", JSON.stringify(initialProfile))
-      }
+      console.warn("Failed to load investor profile:", err)
+      setError("Couldn't load your profile. Check your connection and reload.")
     } finally {
       setLoading(false)
     }
   }
 
-  const saveProfileDataLocally = (updated: InvestorProfile) => {
-    setProfile(updated)
-    localStorage.setItem("investor_profile_data", JSON.stringify(updated))
-    localStorage.setItem("demo_name", updated.name)
-    window.dispatchEvent(new CustomEvent("investor-profile-update"))
+  // Only send what the investor actually changed, so untouched defaults (e.g. a $5k min check)
+  // never get recorded as their answer.
+  const changedFields = (candidate: Record<string, unknown>) => {
+    const base = (profile ?? {}) as Record<string, unknown>
+    return Object.fromEntries(
+      Object.entries(candidate).filter(([k, v]) => JSON.stringify(v) !== JSON.stringify(base[k]))
+    )
   }
 
-  const saveProfile = async () => {
+  const putChanges = async (path: string, candidate: Record<string, unknown>) => {
+    const payload = changedFields(candidate)
+    if (Object.keys(payload).length === 0) {
+      toast({ title: "Nothing to save", description: "No changes since the last save." })
+      return
+    }
     try {
       setSaving(true)
       setError(null)
-      const payload = { name, firm, minCheck, maxCheck, bio, totalCapitalPool }
-      await apiClient.put("/investor/profile", payload)
-      await fetchProfile()
+      const res = await apiClient.put<InvestorProfile>(path, payload)
+      setProfile(res.data)
+      toast({ title: "Saved" })
     } catch (err) {
-      console.warn("Failed API save, updating locally:", err)
-      if (profile) {
-        const updated: InvestorProfile = {
-          ...profile,
-          name,
-          firm,
-          minCheck,
-          maxCheck,
-          bio,
-          interests,
-          escrowPreference,
-          ndaPreference,
-          openSourcePreference,
-          hardwarePreference,
-          cryptographyPreference,
-          stageFocus,
-          customMatchKeywords,
-          notes,
-          leadStatus,
-          legalStructures,
-          vehicles,
-          superpowers,
-          coInvestors,
-          totalCapitalPool
-        }
-        saveProfileDataLocally(updated)
-      }
+      const message = (err as { response?: { data?: { message?: string } } })?.response?.data?.message
+      toast({ title: "Not saved", description: message || "Please try again.", variant: "destructive" })
     } finally {
       setSaving(false)
     }
   }
 
-  const savePreferences = async () => {
-    try {
-      setSaving(true)
-      setError(null)
-      const payload = {
-        escrowPreference,
-        ndaPreference,
-        openSourcePreference,
-        hardwarePreference,
-        cryptographyPreference,
-        pacePerQuarter,
-        stageFocus,
-        customMatchKeywords,
-        notes,
-        leadStatus,
-        legalStructures,
-        vehicles,
-        superpowers,
-        coInvestors,
-        totalCapitalPool
-      }
-      await apiClient.put("/investor/preferences", payload)
-      await fetchProfile()
-    } catch (err) {
-      console.warn("Failed API save preferences, updating locally:", err)
-      if (profile) {
-        const updated: InvestorProfile = {
-          ...profile,
-          escrowPreference,
-          ndaPreference,
-          openSourcePreference,
-          hardwarePreference,
-          cryptographyPreference,
-          pacePerQuarter,
-          stageFocus,
-          customMatchKeywords,
-          notes,
-          leadStatus,
-          legalStructures,
-          vehicles,
-          superpowers,
-          coInvestors,
-          totalCapitalPool
-        }
-        saveProfileDataLocally(updated)
-      }
-    } finally {
-      setSaving(false)
-    }
-  }
+  const saveProfile = () =>
+    putChanges("/investor/profile", {
+      name, firm, minCheck, maxCheck, bio,
+      ...(pool.trim() ? { totalCapitalPool: Number(pool) } : {}),
+    })
+
+  const savePreferences = () =>
+    putChanges("/investor/preferences", {
+      escrowPreference, ndaPreference, openSourcePreference, hardwarePreference, cryptographyPreference,
+      pacePerQuarter, stageFocus, customMatchKeywords, leadStatus, legalStructures, vehicles, superpowers,
+      coInvestors,
+    })
 
   const updateInterests = async (newInterests: string[]) => {
+    const previous = interests
+    setInterests(newInterests)
     try {
-      await apiClient.put("/investor/interests", { interests: newInterests })
-      setInterests(newInterests)
-    } catch (err) {
-      console.warn("Failed API update interests, updating locally:", err)
-      setInterests(newInterests)
-      if (profile) {
-        const updated = { ...profile, interests: newInterests }
-        saveProfileDataLocally(updated)
-      }
+      const res = await apiClient.put<InvestorProfile>("/investor/interests", { interests: newInterests })
+      setProfile(res.data)
+    } catch {
+      setInterests(previous)
+      toast({ title: "Sectors not saved", description: "Please try again.", variant: "destructive" })
     }
   }
 
   const updateVisibility = async (field: "publicProfile" | "handle", value: boolean | string) => {
     try {
-      await apiClient.put("/investor/visibility", { [field]: value })
+      const res = await apiClient.put<InvestorProfile>("/investor/visibility", { [field]: value })
+      setProfile(res.data)
       if (field === "publicProfile") setPublicProfile(value as boolean)
       if (field === "handle") setHandle(value as string)
-    } catch (err) {
-      console.warn(`Failed API update visibility for ${field}, updating locally:`, err)
-      if (field === "publicProfile") setPublicProfile(value as boolean)
-      if (field === "handle") setHandle(value as string)
-      if (profile) {
-        const updated = { ...profile, [field]: value }
-        saveProfileDataLocally(updated)
-      }
+    } catch {
+      toast({ title: "Visibility not saved", description: "Please try again.", variant: "destructive" })
+    }
+  }
+
+  const saveNotes = async (updatedNotes: InvestorNote[]) => {
+    const previous = notes
+    setNotes(updatedNotes)
+    try {
+      const res = await apiClient.put<InvestorProfile>("/investor/preferences", {
+        notes: updatedNotes.map(({ content, createdAt }) => ({ content, createdAt })),
+      })
+      setProfile(res.data)
+    } catch {
+      setNotes(previous)
+      toast({ title: "Note not saved", description: "Please try again.", variant: "destructive" })
     }
   }
 
@@ -470,23 +323,9 @@ export default function InvestorProfilePage() {
       })
       setAvatarUrl(response.data.url)
     } catch (err) {
-      console.warn("Failed API upload avatar, generating URL locally:", err)
-      const dummyUrl = URL.createObjectURL(file)
-      setAvatarUrl(dummyUrl)
-      if (profile) {
-        const updated = { ...profile, avatarUrl: dummyUrl }
-        saveProfileDataLocally(updated)
-      }
-    }
-  }
-
-  const requestReverification = async () => {
-    try {
-      await apiClient.post("/investor/reverify")
-      alert("Re-verification request submitted")
-    } catch (err) {
-      console.warn("Failed API request verification, simulating locally:", err)
-      alert("Re-verification request submitted (Sandbox Mode)")
+      // No fake local preview: a blob: URL would vanish on reload and look like a saved photo.
+      console.warn("Avatar upload failed:", err)
+      toast({ title: "Photo not uploaded", description: "Use a PNG or JPG under 5 MB and try again.", variant: "destructive" })
     }
   }
 
@@ -498,7 +337,7 @@ export default function InvestorProfilePage() {
   }
 
   const handleAddCustomSector = () => {
-    const val = newSectorInput.trim()
+    const val = normalize("sectors", newSectorInput) ?? ""
     if (!val) return
     if (interests.includes(val)) {
       setNewSectorInput("")
@@ -521,7 +360,7 @@ export default function InvestorProfilePage() {
   }
 
   const handleAddLegalStructure = () => {
-    const val = newStructureInput.trim()
+    const val = normalize("legalStructures", newStructureInput) ?? ""
     if (!val) return
     if (legalStructures.includes(val)) {
       setNewStructureInput("")
@@ -550,7 +389,7 @@ export default function InvestorProfilePage() {
     setSuperpowers((prev) => (prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]))
   }
 
-  const toggleVehicle = (v: "Direct Fund" | "SPV" | "Syndicate" | "Venture Debt") => {
+  const toggleVehicle = (v: string) => {
     setVehicles((prev) => (prev.includes(v) ? prev.filter((x) => x !== v) : [...prev, v]))
   }
 
@@ -563,997 +402,428 @@ export default function InvestorProfilePage() {
       content: val,
       createdAt: new Date().toLocaleDateString()
     }
-    const updatedNotes = [newNote, ...notes]
-    setNotes(updatedNotes)
     setNewNoteText("")
-    
-    if (profile) {
-      const updated = {
-        ...profile,
-        notes: updatedNotes
-      }
-      saveProfileDataLocally(updated)
-    }
+    saveNotes([newNote, ...notes])
   }
 
   const handleDeleteNote = (noteId: string) => {
-    const updatedNotes = notes.filter((n) => n.id !== noteId)
-    setNotes(updatedNotes)
-    
-    if (profile) {
-      const updated = {
-        ...profile,
-        notes: updatedNotes
-      }
-      saveProfileDataLocally(updated)
-    }
+    saveNotes(notes.filter((n) => n.id !== noteId))
   }
 
   if (loading) {
+    return <Page><SkeletonRows /></Page>
+  }
+
+  if (error && !profile) {
     return (
-      <div className="mx-auto max-w-[1400px] flex items-center justify-center min-h-[400px]">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-      </div>
+      <Page>
+        <PageTitle title="Couldn't load your profile">{error}</PageTitle>
+        <button type="button" onClick={fetchProfile} className={cn(quietLinkClass, "mt-8")}>Retry</button>
+      </Page>
     )
   }
 
+  const field = "w-full rounded-lg border border-input bg-transparent px-3.5 text-base text-foreground placeholder:text-muted-foreground focus:border-muted-foreground focus:outline-none"
+  const chip = (on: boolean) =>
+    cn(
+      "rounded-full border px-3.5 py-1.5 text-sm transition-colors cursor-pointer",
+      on ? "border-foreground bg-foreground text-background" : "border-input text-muted-foreground hover:text-foreground",
+    )
+  const PREFS: Array<{ label: string; value: TechnicalPreferenceValue; set: (v: TechnicalPreferenceValue) => void }> = [
+    { label: "Signing an NDA before seeing files", value: ndaPreference, set: setNdaPreference },
+    { label: "Releasing money in milestones", value: escrowPreference, set: setEscrowPreference },
+    { label: "Open-source products", value: openSourcePreference, set: setOpenSourcePreference },
+    { label: "Hardware", value: hardwarePreference, set: setHardwarePreference },
+    { label: "Crypto", value: cryptographyPreference, set: setCryptographyPreference },
+  ]
+  // A pace the investor actually chose that isn't one of the usual steps (the old slider allowed any)
+  // gets its own chip; the schema default (4) is not an answer, so it stays unselected.
+  const PACE_STEPS = [1, 3, 6, 10]
+  const PACE = PACE_STEPS.includes(pacePerQuarter) || !profile?.knownFields?.includes("pacePerQuarter")
+    ? PACE_STEPS
+    : [...PACE_STEPS, pacePerQuarter].sort((a, b) => a - b)
+
   return (
-    <div className="w-full pt-6 pb-24 px-6 xl:px-10 space-y-12">
-      {/* Header: Avatar • Info • Trust */}
-      <section className="rounded-2xl bg-card/10 border border-border/15 backdrop-blur-xl p-8 shadow-sm">
-        <div className="grid gap-4 md:grid-cols-[auto_minmax(0,1fr)] lg:grid-cols-[auto_minmax(0,1fr)_360px] md:items-start lg:items-center">
-          <div>
+    <Page>
+      {/* Laptops (xl): how you invest on the left; sectors, visibility and portfolio on the right.
+          On phones the right column follows the left one. */}
+      <Split>
+        <Main>
+          <div className="flex items-start gap-6">
             <AvatarUploader
               name={userName}
-              src={avatarUrl}
+              src={assetUrl(avatarUrl) ?? null}
               onChange={(file, url) => {
                 if (file) uploadAvatar(file)
                 else setAvatarUrl(url)
               }}
-              size={80}
+              size={64}
             />
-          </div>
-
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2 min-w-0">
-              <h1 className="text-xl sm:text-2xl font-semibold tracking-tight break-words">{userName}</h1>
-              <VerificationBadge className="shrink-0" />
-              {accreditedVerified && (
-                <Badge className="bg-emerald-500/10 text-emerald-400 border-emerald-500/25 font-mono text-[9.5px] py-0.5 px-2 rounded-full flex items-center gap-1 shrink-0">
-                  <ShieldCheck className="h-3 w-3 animate-pulse" /> SEC 506(c) Verified
-                </Badge>
-              )}
-            </div>
-            <p className="mt-1 flex items-center gap-2 text-foreground/70 text-sm font-mono">
-              <Building2 className="h-4 w-4 text-muted-foreground" />
-              <span className="truncate">{firm || "Horizon Ventures"}</span>
-            </p>
-          </div>
-
-          <div className="flex items-center gap-4 md:col-span-2 lg:col-span-1">
-            <div className="flex-1 lg:flex-none">
-              <TrustInspector
-                trust={profile?.trust ?? 0}
-                baseline={75}
-                breakdown={profile?.trustBreakdown}
-                className="w-full max-w-[220px]"
+            <div className="min-w-0 flex-1">
+              <PageTitle
+                title={
+                  <>
+                    {userName || "Your profile"}
+                    {profile?.verification?.status === "verified" && (
+                      <span className="mt-1 block text-[15px] text-muted-foreground sm:ml-3 sm:mt-0 sm:inline sm:align-middle">Verified investor</span>
+                    )}
+                  </>
+                }
               />
+              <p className="mt-2 text-[15px] text-muted-foreground">{firm || "Add your firm below, if you have one."}</p>
             </div>
-            <Button
-              onClick={requestReverification}
-              className="rounded-lg bg-primary text-primary-foreground hover:opacity-90 cursor-pointer"
-            >
-              <ShieldCheck className="mr-2 h-4 w-4" />
-              Request re‑verify
-            </Button>
           </div>
-        </div>
-      </section>
 
-      {/* Body: Main left • Right rail */}
-      <div className="mt-10 sm:mt-12 grid gap-10 sm:gap-12 lg:grid-cols-[minmax(0,1fr)_380px]">
-        {/* Main column */}
-        <div className="min-w-0 space-y-10 sm:space-y-12">
-          {/* Essentials */}
-          <Card className="bg-card/10 border-border/15 backdrop-blur-xl">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base flex items-center gap-2 font-serif font-light text-foreground">
-                <UserRound className="h-4 w-4 text-muted-foreground" />
-                Profile Details
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="grid gap-4 sm:grid-cols-2">
-              <Field label="Name">
-                <Input
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  className="bg-accent/30 border-border text-xs"
-                />
-              </Field>
-              <Field label="Affiliation">
-                <Input
-                  value={firm}
-                  onChange={(e) => setFirm(e.target.value)}
-                  className="bg-accent/30 border-border text-xs"
-                />
-              </Field>
-
-              <div className="grid gap-2 sm:col-span-2">
-                <label className="text-xs text-muted-foreground font-mono uppercase tracking-wider text-[10px]">Typical check size (USD)</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-muted-foreground font-mono">Min</span>
-                    <Input
-                      type="number"
-                      min={0}
-                      step={1000}
-                      value={minCheck}
-                      onChange={(e) => setMinCheck(safeInt(e.target.value, minCheck))}
-                      className="h-9 bg-accent/30 border-border text-xs"
-                    />
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-muted-foreground font-mono">Max</span>
-                    <Input
-                      type="number"
-                      min={0}
-                      step={1000}
-                      value={maxCheck}
-                      onChange={(e) => setMaxCheck(safeInt(e.target.value, maxCheck))}
-                      className="h-9 bg-accent/30 border-border text-xs"
-                    />
-                  </div>
+          <Section title="Basics">
+            <div className="space-y-5">
+              <div className="grid gap-5 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <label htmlFor="i-name" className="block text-[15px] text-foreground">Name</label>
+                  <input id="i-name" value={name} onChange={(e) => setName(e.target.value)} className={cn(field, "h-11")} />
+                </div>
+                <div className="space-y-2">
+                  <label htmlFor="i-firm" className="block text-[15px] text-foreground">Firm <span className="text-muted-foreground">(optional)</span></label>
+                  <input id="i-firm" value={firm} onChange={(e) => setFirm(e.target.value)} className={cn(field, "h-11")} />
                 </div>
               </div>
-
-              <div className="grid gap-2 sm:col-span-2">
-                <Field label="Total Capital Pool Allocation (USD)">
-                  <Input
-                    type="number"
-                    min={0}
-                    step={10000}
-                    value={totalCapitalPool}
-                    onChange={(e) => setTotalCapitalPool(safeInt(e.target.value, totalCapitalPool))}
-                    className="h-9 bg-accent/30 border-border text-xs"
-                  />
-                </Field>
-              </div>
-
-              <div className="sm:col-span-2">
-                <Field label="Bio">
-                  <Textarea
-                    value={bio}
-                    onChange={(e) => setBio(e.target.value)}
-                    className="min-h-[100px] bg-accent/30 border-border text-xs leading-relaxed"
-                  />
-                </Field>
-              </div>
-
-              <div className="sm:col-span-2">
-                <Button
-                  onClick={saveProfile}
-                  disabled={saving}
-                  className="w-fit rounded-lg bg-primary text-primary-foreground hover:opacity-90 cursor-pointer"
-                >
-                  {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                  Save profile
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Investment Sector Focus (With Custom Tag Adder) */}
-          <Card className="bg-card/10 border-border/15 backdrop-blur-xl">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base flex items-center gap-2 font-serif font-light text-foreground">
-                <Tag className="h-4 w-4 text-muted-foreground" />
-                Investment Sector focus
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-5">
-              
-              {/* Active list of selected sectors (dismissible) */}
-              <div className="space-y-1.5">
-                <div className="text-[10px] text-muted-foreground font-mono uppercase tracking-wider">Active Sectors</div>
-                <div className="flex flex-wrap gap-2">
-                  {interests.map((t) => (
-                    <div
-                      key={t}
-                      className="text-xs rounded-md px-2.5 py-1.5 border flex items-center gap-1.5 border-[var(--brand-accent)] bg-[var(--brand-accent)]/10 text-foreground font-sans font-medium"
-                    >
-                      <span>{t}</span>
-                      <button
-                        onClick={() => toggleInterest(t)}
-                        className="text-foreground/45 hover:text-foreground/80 font-bold ml-0.5 cursor-pointer bg-transparent border-0 p-0"
-                        title={`Remove ${t}`}
-                      >
-                        ×
-                      </button>
-                    </div>
-                  ))}
-                  {interests.length === 0 && (
-                    <div className="text-xs text-muted-foreground italic py-1">No active sectors selected. Use suggestions or type custom sectors below.</div>
-                  )}
+              <div className="grid gap-5 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <label htmlFor="i-min" className="block text-[15px] text-foreground">Smallest check, US dollars</label>
+                  <input id="i-min" inputMode="numeric" value={minCheck} onChange={(e) => setMinCheck(safeInt(e.target.value, minCheck))} className={cn(field, "h-11")} />
+                </div>
+                <div className="space-y-2">
+                  <label htmlFor="i-max" className="block text-[15px] text-foreground">Largest check, US dollars</label>
+                  <input id="i-max" inputMode="numeric" value={maxCheck} onChange={(e) => setMaxCheck(safeInt(e.target.value, maxCheck))} className={cn(field, "h-11")} />
                 </div>
               </div>
+              <div className="space-y-2">
+                <label htmlFor="i-pool" className="block text-[15px] text-foreground">
+                  Capital pool, US dollars <span className="text-muted-foreground">(optional; only you see it)</span>
+                </label>
+                <input
+                  id="i-pool"
+                  inputMode="numeric"
+                  value={pool}
+                  placeholder="What you plan to invest in total"
+                  onChange={(e) => setPool(e.target.value.replace(/[^0-9]/g, "").slice(0, 10))}
+                  className={cn(field, "h-11 sm:max-w-[50%]")}
+                />
+              </div>
+              <div className="space-y-2">
+                <label htmlFor="i-bio" className="block text-[15px] text-foreground">About you <span className="text-muted-foreground">(optional)</span></label>
+                <textarea id="i-bio" value={bio} onChange={(e) => setBio(e.target.value)} rows={4} className={cn(field, "resize-none py-3 leading-relaxed")} />
+              </div>
+              <button type="button" onClick={saveProfile} disabled={saving} className={pillClass}>{saving ? "Saving…" : "Save"}</button>
+            </div>
+          </Section>
 
-              {/* Suggested Tags suggestions list */}
-              <div className="space-y-1.5 pt-2 border-t border-border/10">
-                <div className="text-[10px] text-muted-foreground font-mono uppercase tracking-wider">Suggested Sectors</div>
+          <Section title="How you invest">
+            <div className="space-y-8">
+              <div>
+                <p className="mb-3 text-[15px] text-foreground">Stages</p>
                 <div className="flex flex-wrap gap-2">
-                  {PRESET_INTERESTS.filter((t) => !interests.includes(t)).map((t) => (
-                    <button
-                      key={t}
-                      onClick={() => toggleInterest(t)}
-                      className="text-xs rounded-md px-3 py-1.5 border border-border/60 text-foreground/80 hover:bg-accent/40 transition cursor-pointer"
-                    >
-                      + {t}
+                  {ALL_STAGES.map((st) => (
+                    <button key={st} type="button" onClick={() => toggleStage(st)} className={chip(stageFocus.includes(st))} aria-pressed={stageFocus.includes(st)}>
+                      {labelFor("fundingStages", st)}
                     </button>
                   ))}
                 </div>
               </div>
-
-              {/* Inline Custom Sector Adder */}
-              <div className="flex items-center gap-2 max-w-sm pt-2 border-t border-border/10">
-                <Input
-                  placeholder="Add custom sector (e.g. Zero-Knowledge)..."
-                  value={newSectorInput}
-                  onChange={(e) => setNewSectorInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      e.preventDefault()
-                      handleAddCustomSector()
-                    }
-                  }}
-                  className="h-8 bg-accent/30 border-border text-xs flex-1"
-                />
-                <Button
-                  size="sm"
-                  onClick={handleAddCustomSector}
-                  className="h-8 text-xs rounded-lg px-3 bg-foreground text-background hover:bg-foreground/90 cursor-pointer shrink-0"
-                >
-                  <Plus className="mr-1 h-3.5 w-3.5" /> Add
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* New Card: Matchmaking & Syndicate Details */}
-          <Card className="bg-card/10 border-border/15 backdrop-blur-xl">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base flex items-center gap-2 font-serif font-light text-foreground">
-                <Users2 className="h-4.5 w-4.5 text-muted-foreground" />
-                Matchmaking & Syndicate Details
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              
-              {/* 1. Lead Status Segmented Control */}
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-lg border border-border bg-accent/30 p-3.5 shadow-sm">
-                <div className="min-w-0">
-                  <div className="font-semibold text-xs text-foreground/90 uppercase tracking-wider">Lead Investor Status</div>
-                  <div className="text-[11px] text-muted-foreground leading-normal mt-1">Specify whether you lead investment rounds or follow/participate.</div>
-                </div>
-                <div className="flex bg-accent/60 rounded-lg p-0.5 border border-border/40 w-fit shrink-0">
+              <div>
+                <p className="mb-3 text-[15px] text-foreground">Do you lead rounds?</p>
+                <div className="flex flex-wrap gap-2">
                   {([
-                    { id: "lead", label: "Lead" },
-                    { id: "follow", label: "Follow-only" },
-                    { id: "both", label: "Flexible/Both" }
-                  ] as const).map((opt) => {
-                    const isActive = leadStatus === opt.id
-                    return (
-                      <button
-                        key={opt.id}
-                        type="button"
-                        onClick={() => setLeadStatus(opt.id)}
-                        className={cn(
-                          "px-3 py-1 rounded-md text-[10px] font-mono uppercase font-bold tracking-wider transition-all border border-transparent cursor-pointer",
-                          isActive
-                            ? "bg-[var(--brand-accent)]/10 text-foreground border-[var(--brand-accent)]/35"
-                            : "text-foreground/45 hover:text-foreground/80 hover:bg-foreground/5"
-                        )}
-                      >
-                        {opt.label}
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-
-              {/* 2. Allowed Legal Structures Tag List */}
-              <div className="grid gap-2.5 pt-3 border-t border-border/10">
-                <div className="text-[10px] text-muted-foreground font-mono uppercase tracking-wider">Allowed Legal Structures</div>
-                
-                <div className="flex flex-wrap gap-2 mb-1.5">
-                  {legalStructures.map((s) => (
-                    <div
-                      key={s}
-                      className="text-xs rounded-md px-2.5 py-1.5 border border-border bg-accent/20 text-foreground flex items-center gap-1.5 font-sans"
-                    >
-                      <span>{s}</span>
-                      <button
-                        onClick={() => setLegalStructures((prev) => prev.filter((x) => x !== s))}
-                        className="text-foreground/45 hover:text-foreground/80 font-bold ml-0.5 cursor-pointer bg-transparent border-0 p-0"
-                      >
-                        ×
-                      </button>
-                    </div>
-                  ))}
-                  {legalStructures.length === 0 && (
-                    <div className="text-xs text-muted-foreground italic">No legal structures specified. Add custom or suggested ones below.</div>
-                  )}
-                </div>
-
-                <div className="flex flex-wrap gap-2 mb-2">
-                  {PRESET_STRUCTURES.filter((s) => !legalStructures.includes(s)).map((s) => (
-                    <button
-                      key={s}
-                      onClick={() => setLegalStructures((prev) => [...prev, s])}
-                      className="text-[11px] rounded border border-border/60 text-foreground/75 px-2 py-1 hover:bg-accent/40 cursor-pointer"
-                    >
-                      + {s}
+                    { id: "lead", label: "I lead" },
+                    { id: "follow", label: "I follow" },
+                    { id: "both", label: "Either" },
+                  ] as const).map((o) => (
+                    <button key={o.id} type="button" onClick={() => setLeadStatus(o.id)} className={chip(leadStatus === o.id)} aria-pressed={leadStatus === o.id}>
+                      {o.label}
                     </button>
                   ))}
                 </div>
-
-                <div className="flex items-center gap-2 max-w-sm">
-                  <Input
-                    placeholder="Add custom structure (e.g. LLC)..."
-                    value={newStructureInput}
-                    onChange={(e) => setNewStructureInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault()
-                        handleAddLegalStructure()
-                      }
-                    }}
-                    className="h-8 bg-accent/30 border-border text-xs flex-1"
-                  />
-                  <Button
-                    size="sm"
-                    onClick={handleAddLegalStructure}
-                    className="h-8 text-xs rounded-lg px-3 bg-foreground text-background hover:bg-foreground/90 cursor-pointer shrink-0"
-                  >
-                    <Plus className="mr-1 h-3.5 w-3.5" /> Add
-                  </Button>
-                </div>
               </div>
-
-              {/* 3. Allowed Investment Vehicles Checks */}
-              <div className="grid gap-2.5 pt-4 border-t border-border/10">
-                <div className="text-[10px] text-muted-foreground font-mono uppercase tracking-wider">Investment Vehicles Accepted</div>
-                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-                  {(["Direct Fund", "SPV", "Syndicate", "Venture Debt"] as const).map((v) => {
-                    const isChecked = vehicles.includes(v)
-                    return (
-                      <button
-                        key={v}
-                        type="button"
-                        onClick={() => toggleVehicle(v)}
-                        className={cn(
-                          "flex items-center justify-between rounded-lg border p-3 text-xs transition-all cursor-pointer text-left w-full",
-                          isChecked
-                            ? "border-[var(--brand-accent)] bg-[var(--brand-accent)]/10 text-foreground"
-                            : "border-border/60 text-foreground/60 hover:bg-accent/40"
-                        )}
-                      >
-                        <span>{v}</span>
-                        <div className={cn(
-                          "size-4 rounded-full border flex items-center justify-center shrink-0 ml-2",
-                          isChecked ? "border-[var(--brand-accent)] bg-[var(--brand-accent)]" : "border-border/50 bg-transparent"
-                        )}>
-                          {isChecked && (
-                            <svg className="size-2.5 text-background stroke-[3.5]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-                            </svg>
-                          )}
-                        </div>
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-
-              {/* 4. Operational Support/Superpowers */}
-              <div className="grid gap-2.5 pt-4 border-t border-border/10">
-                <div className="text-[10px] text-muted-foreground font-mono uppercase tracking-wider">Operational Support & Superpowers (Value Add)</div>
+              <div>
+                <p className="mb-3 text-[15px] text-foreground">Deals per quarter</p>
                 <div className="flex flex-wrap gap-2">
-                  {ALL_SUPERPOWERS.map((s) => {
-                    const isChecked = superpowers.includes(s)
-                    return (
-                      <button
-                        key={s}
-                        type="button"
-                        onClick={() => toggleSuperpower(s)}
-                        className={cn(
-                          "text-xs rounded-md px-3 py-1.5 border transition cursor-pointer font-sans font-medium",
-                          isChecked
-                            ? "border-[var(--brand-accent)] bg-[var(--brand-accent)]/10 text-foreground"
-                            : "border-border/60 text-foreground/80 hover:bg-accent/40"
-                        )}
-                      >
-                        {isChecked ? `✓ ${s}` : `+ ${s}`}
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-
-              {/* 5. Co-Investment Networks tag adder */}
-              <div className="grid gap-2.5 pt-4 border-t border-border/10">
-                <div className="text-[10px] text-muted-foreground font-mono uppercase tracking-wider">Co-Investment Networks (Syndicates)</div>
-                
-                <div className="flex flex-wrap gap-2 mb-1.5">
-                  {coInvestors.map((c) => (
-                    <div
-                      key={c}
-                      className="text-xs rounded-full px-2.5 py-1 bg-accent/40 border border-border/60 flex items-center gap-1.5 text-foreground/90 font-mono"
-                    >
-                      <span>{c}</span>
-                      <button
-                        onClick={() => setCoInvestors((prev) => prev.filter((x) => x !== c))}
-                        className="text-foreground/45 hover:text-foreground/75 font-bold ml-0.5 cursor-pointer bg-transparent border-0 p-0"
-                      >
-                        ×
-                      </button>
-                    </div>
+                  {PACE.map((n) => (
+                    <button key={n} type="button" onClick={() => setPacePerQuarter(n)} className={chip(pacePerQuarter === n)} aria-pressed={pacePerQuarter === n}>
+                      {n === 10 ? "10 or more" : n}
+                    </button>
                   ))}
-                  {coInvestors.length === 0 && (
-                    <div className="text-xs text-muted-foreground italic">No co-investors linked. Add regular syndicates below.</div>
-                  )}
-                </div>
-
-                <div className="flex items-center gap-2 max-w-sm">
-                  <Input
-                    placeholder="Add fund or investor name..."
-                    value={newCoInvestorInput}
-                    onChange={(e) => setNewCoInvestorInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault()
-                        handleAddCoInvestor()
-                      }
-                    }}
-                    className="h-8 bg-accent/30 border-border text-xs flex-1"
-                  />
-                  <Button
-                    size="sm"
-                    onClick={handleAddCoInvestor}
-                    className="h-8 text-xs rounded-lg px-3 bg-foreground text-background hover:bg-foreground/90 cursor-pointer shrink-0"
-                  >
-                    <Plus className="mr-1 h-3.5 w-3.5" /> Add
-                  </Button>
                 </div>
               </div>
-
-              <div className="pt-2 border-t border-border/10">
-                <Button
-                  onClick={savePreferences}
-                  disabled={saving}
-                  className="w-fit rounded-lg bg-primary text-primary-foreground hover:opacity-90 cursor-pointer"
-                >
-                  {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                  Save syndicate details
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Preferences with Segmented 3-Way Toggles */}
-          <Card className="bg-card/10 border-border/15 backdrop-blur-xl">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base flex items-center gap-2 font-serif font-light text-foreground">
-                <Wallet className="h-4 w-4 text-muted-foreground" />
-                Technical & Commitment Preferences
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-6">
-              
-              {/* 3-State Toggle Group List */}
-              <div className="space-y-3.5">
-                <ThreeStateToggle
-                  label="Milestone-based Escrow Releases"
-                  desc="Preference for disbursements tied to verified cohort delivery milestones."
-                  value={escrowPreference}
-                  onChange={setEscrowPreference}
-                />
-                <ThreeStateToggle
-                  label="Mutual NDA (mNDA)"
-                  desc="Preference for signing mutual NDAs prior to reviewing code repositories."
-                  value={ndaPreference}
-                  onChange={setNdaPreference}
-                />
-                <ThreeStateToggle
-                  label="Open Source Code Repositories"
-                  desc="Preference for systems built fully or partially on open-source packages."
-                  value={openSourcePreference}
-                  onChange={setOpenSourcePreference}
-                />
-                <ThreeStateToggle
-                  label="Hardware Component Audits"
-                  desc="Preference for physical hardware design validation/supply-chain audits."
-                  value={hardwarePreference}
-                  onChange={setHardwarePreference}
-                />
-                <ThreeStateToggle
-                  label="Cryptographic Trust Verification"
-                  desc="Preference for on-chain/cryptographic signatures or zero-knowledge credentials."
-                  value={cryptographyPreference}
-                  onChange={setCryptographyPreference}
-                />
-              </div>
-
-              {/* Stage Focus Grid (Expanded Stages) */}
-              <div className="grid gap-2.5 pt-4 border-t border-border/10">
-                <div className="text-[10px] text-muted-foreground font-mono uppercase tracking-wider">Investment Stage focus</div>
+              <div>
+                <p className="mb-3 text-[15px] text-foreground">How you put money in</p>
                 <div className="flex flex-wrap gap-2">
-                  {ALL_STAGES.map((s) => {
-                    const on = stageFocus.includes(s)
-                    return (
-                      <button
-                        key={s}
-                        type="button"
-                        onClick={() => toggleStage(s)}
-                        className={cn(
-                          "text-xs rounded-md px-3 py-1.5 border transition cursor-pointer font-sans font-medium",
-                          on
-                            ? "border-[var(--brand-accent)] bg-[var(--brand-accent)]/10 text-foreground"
-                            : "border-border/60 text-foreground/80 hover:bg-accent/40"
-                        )}
-                        aria-pressed={on}
-                      >
-                        {s}
-                      </button>
-                    )
-                  })}
-                </div>
-              </div>
-
-              {/* Pace Slider */}
-              <div className="grid gap-2 pt-4 border-t border-border/10">
-                <div className="text-[10px] text-muted-foreground font-mono uppercase tracking-wider">Pace (investments per quarter)</div>
-                <div className="flex items-center gap-3">
-                  <input
-                    type="range"
-                    min={0}
-                    max={12}
-                    step={1}
-                    value={pacePerQuarter}
-                    onChange={(e) => setPacePerQuarter(Number.parseInt(e.target.value))}
-                    className="w-full cursor-pointer accent-[var(--brand-accent)]"
-                    aria-label="Pace per quarter"
-                  />
-                  <div className="w-10 text-right font-mono text-xs">{pacePerQuarter}</div>
-                </div>
-              </div>
-
-              <Button
-                onClick={savePreferences}
-                disabled={saving}
-                className="w-fit rounded-lg bg-primary text-primary-foreground hover:opacity-90 cursor-pointer"
-              >
-                {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                Save preferences
-              </Button>
-            </CardContent>
-          </Card>
-
-          {/* Custom Matching Criteria & Notes (Freeform Manual Input) */}
-          <Card className="bg-card/10 border-border/15 backdrop-blur-xl">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base flex items-center gap-2 font-serif font-light text-foreground">
-                <SlidersHorizontal className="h-4 w-4 text-muted-foreground" />
-                Custom Matching Criteria & Notes
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-5">
-              
-              {/* Keyword tags */}
-              <div className="grid gap-2">
-                <label className="text-[10px] text-muted-foreground font-mono uppercase tracking-wider">
-                  Custom Matching Tags (e.g. SOC2, YC Alumni, Stanford)
-                </label>
-                <div className="flex flex-wrap gap-2 mb-1.5">
-                  {customMatchKeywords.map((k) => (
-                    <div
-                      key={k}
-                      className="text-xs rounded-full px-3 py-1 bg-accent/40 border border-border/60 flex items-center gap-1.5 text-foreground/90 font-mono"
-                    >
-                      <span>{k}</span>
-                      <button
-                        onClick={() => setCustomMatchKeywords((prev) => prev.filter((x) => x !== k))}
-                        className="text-foreground/45 hover:text-foreground/75 font-bold cursor-pointer bg-transparent border-0 p-0"
-                      >
-                        ×
-                      </button>
-                    </div>
+                  {ALL_VEHICLES.map((v) => (
+                    <button key={v} type="button" onClick={() => toggleVehicle(v)} className={chip(vehicles.includes(v))} aria-pressed={vehicles.includes(v)}>
+                      {labelFor("vehicles", v)}
+                    </button>
                   ))}
-                  {customMatchKeywords.length === 0 && (
-                    <div className="text-xs text-muted-foreground italic font-sans py-1">No custom match tags added yet.</div>
-                  )}
-                </div>
-                <div className="flex items-center gap-2 max-w-sm">
-                  <Input
-                    placeholder="Type custom tag (e.g. Rust)..."
-                    value={newKeywordInput}
-                    onChange={(e) => setNewKeywordInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        e.preventDefault()
-                        handleAddKeyword()
-                      }
-                    }}
-                    className="h-8 bg-accent/30 border-border text-xs flex-1"
-                  />
-                  <Button
-                    size="sm"
-                    onClick={handleAddKeyword}
-                    className="h-8 text-xs rounded-lg px-3 bg-foreground text-background hover:bg-foreground/90 cursor-pointer shrink-0"
-                  >
-                    <Plus className="mr-1 h-3.5 w-3.5" /> Add
-                  </Button>
                 </div>
               </div>
-
-              {/* Ledger/List of Notes */}
-              <div className="grid gap-3 pt-3 border-t border-border/10">
-                <label className="text-[10px] text-muted-foreground font-mono uppercase tracking-wider">
-                  Investor Match Notes Ledger
-                </label>
-                
-                <div className="space-y-3 max-h-[300px] overflow-y-auto pr-1">
-                  {notes.map((note) => (
-                    <div
-                      key={note.id}
-                      className="rounded-lg border border-border/40 bg-accent/25 p-3.5 relative group shadow-sm flex items-start justify-between gap-4"
-                    >
-                      <div className="space-y-1.5 min-w-0">
-                        <div className="text-[10px] text-muted-foreground font-mono">
-                          Saved: {note.createdAt}
-                        </div>
-                        <p className="text-xs text-foreground/90 whitespace-pre-wrap leading-relaxed font-sans font-light">
-                          {note.content}
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteNote(note.id)}
-                        className="text-foreground/35 hover:text-red-400 p-1 rounded transition cursor-pointer bg-transparent border-0 shrink-0"
-                        title="Delete Note"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    </div>
+              <div>
+                <p className="mb-3 text-[15px] text-foreground">Company types you can invest in</p>
+                <div className="flex flex-wrap gap-2">
+                  {legalStructures.filter((x) => !PRESET_STRUCTURES.includes(x)).map((x) => (
+                    <button key={x} type="button" onClick={() => setLegalStructures((prev) => prev.filter((y) => y !== x))} className={chip(true)}>{x} ×</button>
                   ))}
-
-                  {notes.length === 0 && (
-                    <div className="text-xs text-muted-foreground italic font-sans py-2">
-                      No match notes added yet. Use the composer below to save your constraints.
-                    </div>
-                  )}
+                  {PRESET_STRUCTURES.map((x) => (
+                    <button
+                      key={x}
+                      type="button"
+                      onClick={() => setLegalStructures((prev) => (prev.includes(x) ? prev.filter((y) => y !== x) : [...prev, x]))}
+                      className={chip(legalStructures.includes(x))}
+                      aria-pressed={legalStructures.includes(x)}
+                    >
+                      {labelFor("legalStructures", x)}
+                    </button>
+                  ))}
                 </div>
-              </div>
-
-              {/* Note composer area */}
-              <div className="grid gap-2 pt-3 border-t border-border/10">
-                <label className="text-[10px] text-muted-foreground font-mono uppercase tracking-wider">
-                  Add Match Note / Constraint
-                </label>
-                <Textarea
-                  placeholder="Type a new matching constraint or note (e.g. 'Must have SOC2 security compliance audit finished before Series A check release...')"
-                  value={newNoteText}
-                  onChange={(e) => setNewNoteText(e.target.value)}
-                  className="min-h-[90px] bg-accent/30 border-border text-xs leading-relaxed"
+                <input
+                  value={newStructureInput}
+                  onChange={(e) => setNewStructureInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleAddLegalStructure() } }}
+                  placeholder="Another? Type it and press Enter"
+                  className={cn(field, "mt-4 h-10 text-[15px]")}
                 />
-                <Button
-                  type="button"
-                  onClick={handleAddNote}
-                  disabled={!newNoteText.trim()}
-                  className="w-fit rounded-lg bg-foreground text-background hover:bg-foreground/90 text-xs font-semibold py-1.5 px-3 cursor-pointer mt-1"
-                >
-                  <Plus className="mr-1 h-3.5 w-3.5" /> Add Note to Ledger
-                </Button>
               </div>
-
-              {/* Save All changes button */}
-              <div className="pt-3 border-t border-border/10">
-                <Button
-                  onClick={savePreferences}
-                  disabled={saving}
-                  className="w-fit rounded-lg bg-primary text-primary-foreground hover:opacity-90 cursor-pointer"
-                >
-                  {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
-                  Save match criteria
-                </Button>
+              <div>
+                <p className="mb-3 text-[15px] text-foreground">Help you can give founders</p>
+                <div className="flex flex-wrap gap-2">
+                  {ALL_SUPERPOWERS.map((x) => (
+                    <button key={x} type="button" onClick={() => toggleSuperpower(x)} className={chip(superpowers.includes(x))} aria-pressed={superpowers.includes(x)}>
+                      {labelFor("superpowers", x)}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </CardContent>
-          </Card>
-        </div>
+              <div>
+                <p className="mb-3 text-[15px] text-foreground">People you often invest with</p>
+                {coInvestors.length > 0 && (
+                  <div className="mb-3 flex flex-wrap gap-2">
+                    {coInvestors.map((x) => (
+                      <button key={x} type="button" onClick={() => setCoInvestors((prev) => prev.filter((y) => y !== x))} className={chip(true)}>{x} ×</button>
+                    ))}
+                  </div>
+                )}
+                <input
+                  value={newCoInvestorInput}
+                  onChange={(e) => setNewCoInvestorInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleAddCoInvestor() } }}
+                  placeholder="A name or firm, then Enter"
+                  className={cn(field, "h-10 text-[15px]")}
+                />
+              </div>
+              <div>
+                <p className="mb-3 text-[15px] text-foreground">Your preferences</p>
+                <ul className="divide-y divide-border border-y border-border">
+                  {PREFS.map((pref) => (
+                    <li key={pref.label} className="flex flex-col gap-3 py-4 sm:flex-row sm:items-center sm:justify-between">
+                      <span className="text-[15px]">{pref.label}</span>
+                      <span className="flex gap-2">
+                        {(["yes", "maybe", "no"] as const).map((v) => (
+                          <button key={v} type="button" onClick={() => pref.set(v)} className={chip(pref.value === v)} aria-pressed={pref.value === v}>
+                            {v === "yes" ? "Yes" : v === "maybe" ? "Maybe" : "No"}
+                          </button>
+                        ))}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div>
+                <p className="mb-3 text-[15px] text-foreground">Words that should match you with ideas</p>
+                {customMatchKeywords.length > 0 && (
+                  <div className="mb-3 flex flex-wrap gap-2">
+                    {customMatchKeywords.map((k) => (
+                      <button key={k} type="button" onClick={() => setCustomMatchKeywords((prev) => prev.filter((x) => x !== k))} className={chip(true)}>{k} ×</button>
+                    ))}
+                  </div>
+                )}
+                <input
+                  value={newKeywordInput}
+                  onChange={(e) => setNewKeywordInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleAddKeyword() } }}
+                  placeholder="e.g. carbon credits, then Enter"
+                  className={cn(field, "h-10 text-[15px]")}
+                />
+              </div>
+              <button type="button" onClick={savePreferences} disabled={saving} className={pillClass}>{saving ? "Saving…" : "Save"}</button>
+            </div>
+          </Section>
 
-        {/* Right rail */}
-        <aside className="space-y-8">
-          {/* Visibility & links */}
-          <Card className="bg-card/10 border-border/15 backdrop-blur-xl">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base flex items-center gap-2 font-serif font-light text-foreground">
-                <Link2 className="h-4 w-4 text-muted-foreground" />
-                Visibility & links
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="grid gap-3 text-sm">
-              <RowSwitch
-                label="Public profile"
-                desc="Share a minimal, linkable profile."
-                checked={publicProfile}
-                onCheckedChange={(v) => updateVisibility("publicProfile", v)}
+          <Section title="Private notes">
+            <form onSubmit={(e) => { e.preventDefault(); handleAddNote() }} className="flex flex-col gap-3 sm:flex-row">
+              <input
+                aria-label="New note"
+                value={newNoteText}
+                onChange={(e) => setNewNoteText(e.target.value)}
+                placeholder="Only you can see these"
+                className="h-11 w-full shrink-0 sm:w-auto sm:flex-1 rounded-full border border-input bg-transparent px-5 text-base text-foreground placeholder:text-muted-foreground focus:border-muted-foreground focus:outline-none"
               />
-              <div className="grid gap-2">
-                <div className="text-xs text-muted-foreground font-mono">Handle</div>
-                <div className="flex items-center gap-2">
-                  <span className="text-muted-foreground font-mono">@</span>
-                  <Input
-                    value={handle}
-                    onChange={(e) => setHandle(e.target.value)}
-                    onBlur={(e) => updateVisibility("handle", e.target.value)}
-                    className="h-8 bg-accent/30 border-border text-xs"
-                  />
-                </div>
-                <div className="text-[11px] text-muted-foreground font-mono">
-                  Profile URL: <span className="text-foreground font-medium">something.to/{handle || "alex_horizon"}</span>
-                </div>
-              </div>
-              <div className="grid gap-2">
-                <div className="text-xs text-muted-foreground font-mono">Linked accounts</div>
-                <div className="flex flex-wrap gap-2">
-                  {profile?.links && profile.links.length > 0 ? (
-                    profile.links.map((l, i) => (
-                      <a
-                        key={i}
-                        href={l.href}
-                        className="inline-flex items-center gap-2 rounded-md border border-border/60 bg-accent/30 px-2.5 py-1.5 text-xs hover:bg-accent"
-                      >
-                        <span className="inline-block h-1.5 w-1.5 rounded-full bg-white/60" />
-                        {l.label}
-                      </a>
-                    ))
-                  ) : (
-                    <div className="text-xs text-muted-foreground">No linked accounts</div>
-                  )}
-                  <button className="inline-flex items-center gap-1 rounded-md border border-border/60 bg-accent/30 px-2 py-1 text-[11px] text-foreground/80 hover:bg-accent cursor-pointer">
-                    Connect…
-                  </button>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+              <button type="submit" disabled={!newNoteText.trim()} className={pillClass}>Add note</button>
+            </form>
+            {notes.length > 0 && (
+              <ul className="mt-6 divide-y divide-border">
+                {notes.map((n) => (
+                  <li key={n.id} className="flex items-baseline justify-between gap-6 py-4">
+                    <span className="text-[15px] leading-relaxed">{n.content}</span>
+                    <span className="flex shrink-0 gap-4 text-xs text-muted-foreground">
+                      {n.createdAt}
+                      <button type="button" onClick={() => handleDeleteNote(n.id)} className="hover:text-foreground cursor-pointer">Remove</button>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Section>
+        </Main>
 
-          {/* Portfolio snapshot */}
-          <Card className="bg-card/10 border-border/15 backdrop-blur-xl">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base font-serif font-light text-foreground">Portfolio snapshot</CardTitle>
-            </CardHeader>
-            <CardContent className="grid gap-2">
-              {portfolioList.map((p) => (
-                <Link
-                  key={p.id}
-                  href={`/investor/search/${p.id}`}
-                  className="rounded-md border border-border/60 bg-accent/30 px-3 py-2 text-xs hover:bg-accent transition"
-                >
-                  {p.name}
-                </Link>
+        <Aside>
+          <Section title="Sectors">
+            <div className="flex flex-wrap gap-2">
+              {interests.map((t) => (
+                <button key={t} type="button" onClick={() => toggleInterest(t)} className={chip(true)} aria-label={`Remove ${labelFor("sectors", t)}`}>
+                  {labelFor("sectors", t)} ×
+                </button>
               ))}
-              {portfolioList.length === 0 && (
-                <div className="text-xs text-muted-foreground font-mono">No active portfolio investments.</div>
-              )}
-              <div className="text-[10px] text-muted-foreground font-mono">Tap to view each brief.</div>
-            </CardContent>
-          </Card>
-
-          {/* Accreditation Status */}
-          <Card className="bg-card/10 border-border/15 backdrop-blur-xl">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base flex items-center gap-2 font-serif font-light text-foreground">
-                <ShieldCheck className="h-4 w-4 text-muted-foreground" />
-                Accreditation Status
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3">
-              {accreditedVerified ? (
-                <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/[0.03] p-3 text-xs text-emerald-400 font-mono">
-                  <span className="flex items-center gap-1.5 font-bold mb-1">
-                    <ShieldCheck className="h-4 w-4 animate-pulse" /> SEC 506(c) Accredited
-                  </span>
-                  Your status has been digitally self-certified and synced to escrow nodes.
-                </div>
-              ) : (
-                <div className="rounded-lg border border-amber-500/20 bg-amber-500/[0.03] p-3 text-xs text-amber-500 font-mono space-y-3">
-                  <p>Your accreditation status is currently unverified. Escrow disbursements require self-certification.</p>
-                  <Button 
-                    size="sm" 
-                    onClick={() => setIsVerificationOpen(true)}
-                    className="w-full bg-amber-500 text-black hover:bg-amber-400 text-xs font-semibold rounded-lg cursor-pointer h-8"
-                  >
-                    Certify Accreditation
-                  </Button>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Guidance */}
-          <Card className="bg-card/10 border-border/15 backdrop-blur-xl">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-base font-serif font-light text-foreground">Guidance</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-2 text-xs leading-relaxed font-sans text-muted-foreground">
-              <div className="rounded-md border border-border/60 bg-accent/30 px-3 py-2">
-                Verified investors can enable &quot;Public profile&quot; to receive curated intros.
-              </div>
-              <div className="rounded-md border border-border/60 bg-accent/30 px-3 py-2 font-mono">
-                Trust grows with NDA usage, escrow releases, and verified receipts.
-              </div>
-            </CardContent>
-          </Card>
-        </aside>
-      </div>
-
-      {/* Accreditation self-certification Modal */}
-      {isVerificationOpen && (
-        <Dialog open={isVerificationOpen} onOpenChange={setIsVerificationOpen}>
-          <DialogContent className="w-full max-w-md bg-[#101113] text-white border-white/5 p-6 rounded-xl">
-            <DialogHeader className="space-y-1.5">
-              <DialogTitle className="font-serif font-light text-xl text-white flex items-center gap-2">
-                <ShieldCheck className="h-5 w-5 text-emerald-400" />
-                SEC Accreditation
-              </DialogTitle>
-              <DialogDescription className="text-xs text-white/50 font-mono">
-                Digitally self-certify under Securities Act Rule 506(c)
-              </DialogDescription>
-            </DialogHeader>
-            
-            <div className="space-y-4 pt-2 text-xs leading-relaxed text-white/70">
-              <p>
-                To release escrow funds to active builder cohorts, you must certify that you meet the regulatory accredited investor guidelines:
-              </p>
-              
-              <div className="space-y-2 border border-white/5 rounded-lg p-3 bg-white/[0.01]">
-                <label className="flex items-start gap-2.5 cursor-pointer">
-                  <input
-                    type="radio"
-                    name="acc-criteria"
-                    checked={verifyCriteria === "networth"}
-                    onChange={() => setVerifyCriteria("networth")}
-                    className="mt-0.5 accent-emerald-400"
-                  />
-                  <span><strong>Net Worth:</strong> Individual or joint net worth exceeds $1,000,000 (excluding primary residence).</span>
-                </label>
-                <label className="flex items-start gap-2.5 cursor-pointer">
-                  <input
-                    type="radio"
-                    name="acc-criteria"
-                    checked={verifyCriteria === "income"}
-                    onChange={() => setVerifyCriteria("income")}
-                    className="mt-0.5 accent-emerald-400"
-                  />
-                  <span><strong>Income:</strong> Individual income exceeded $200,000 in each of the past 2 years (or $300,000 jointly).</span>
-                </label>
-                <label className="flex items-start gap-2.5 cursor-pointer">
-                  <input
-                    type="radio"
-                    name="acc-criteria"
-                    checked={verifyCriteria === "web3"}
-                    onChange={() => setVerifyCriteria("web3")}
-                    className="mt-0.5 accent-emerald-400"
-                  />
-                  <span><strong>Ledger Account:</strong> Authenticated web3 signature demonstrating accredited check holdings.</span>
-                </label>
-              </div>
+              {PRESET_INTERESTS.filter((t) => !interests.includes(t)).map((t) => (
+                <button key={t} type="button" onClick={() => toggleInterest(t)} className={chip(false)}>{labelFor("sectors", t)}</button>
+              ))}
             </div>
+            <input
+              value={newSectorInput}
+              onChange={(e) => setNewSectorInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); handleAddCustomSector() } }}
+              placeholder="Another sector? Type it and press Enter"
+              className={cn(field, "mt-4 h-10 text-[15px]")}
+            />
+            <p className="mt-3 text-sm text-muted-foreground">Saved as you tap.</p>
+          </Section>
 
-            <div className="flex justify-end gap-2 pt-4 border-t border-white/5 mt-4">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setIsVerificationOpen(false)}
-                className="h-8 text-xs rounded-lg border-white/10 text-white bg-transparent hover:bg-white/5"
-              >
-                Cancel
-              </Button>
-              <Button
-                size="sm"
-                onClick={handleVerifyAccreditation}
-                className="h-8 text-xs rounded-lg bg-emerald-600 text-white hover:bg-emerald-500 font-semibold"
-              >
-                Sign & Certify
-              </Button>
-            </div>
-          </DialogContent>
-        </Dialog>
-      )}
+          <Section title="Trust">
+            <p className="text-[15px] leading-relaxed text-muted-foreground">
+              <span className="text-foreground">{profile?.trust ?? 0} of 100.</span>{" "}
+              Built from what you do here: {countOf(profile?.trustBreakdown?.history ?? 0, "commitment")} (1 point each)
+              and {countOf(profile?.trustBreakdown?.escrowReleases ?? 0, "release")} (5 each). Signed NDAs and receipts will
+              count once Something records them. Only you see this.
+            </p>
+          </Section>
 
-    </div>
+          <Section title="Who can see you">
+            <label className="flex items-center justify-between gap-6">
+              <span className="text-[15px]">
+                Public profile
+                <span className="block text-sm text-muted-foreground">Founders can find you and your sectors.</span>
+              </span>
+              <Switch checked={publicProfile} onCheckedChange={(v) => updateVisibility("publicProfile", v)} />
+            </label>
+            {publicProfile && (
+              <div className="mt-6 space-y-2">
+                <label htmlFor="i-handle" className="block text-[15px] text-foreground">Your handle</label>
+                <input
+                  id="i-handle"
+                  value={handle}
+                  onChange={(e) => setHandle(e.target.value)}
+                  onBlur={(e) => updateVisibility("handle", e.target.value)}
+                  placeholder="yourname"
+                  className={cn(field, "h-11 max-w-xs")}
+                />
+              </div>
+            )}
+          </Section>
+
+          <Section title="Portfolio" action={portfolioList.length > 0 ? <Link href="/investor/investments" className="hover:text-foreground">Investments</Link> : undefined}>
+            {portfolioList.length === 0 ? (
+              <p className="text-[15px] text-muted-foreground">Ideas you commit to will be listed here.</p>
+            ) : (
+              <ul className="divide-y divide-border border-y border-border">
+                {portfolioList.map((pf) => (
+                  <li key={pf.id}>
+                    <Link href={`/investor/search/${pf.id}`} className="block py-4 text-[15px] hover:underline underline-offset-4">{pf.name}</Link>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Section>
+
+          <VerificationSection profile={profile} onChange={setProfile} />
+        </Aside>
+      </Split>
+    </Page>
   )
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="grid gap-2">
-      <label className="text-xs text-muted-foreground font-mono uppercase tracking-wider text-[10px]">{label}</label>
-      {children}
-    </div>
-  )
-}
 
-function RowSwitch({
-  label,
-  desc,
-  checked,
-  onCheckedChange,
-}: {
-  label: string
-  desc?: string
-  checked: boolean
-  onCheckedChange: (v: boolean) => void
-}) {
-  return (
-    <div className="flex items-start justify-between gap-3 rounded-lg border border-border bg-accent/30 p-3">
-      <div className="min-w-0">
-        <div className="font-medium text-xs text-foreground/80">{label}</div>
-        {desc && <div className="text-[10px] text-muted-foreground leading-normal mt-0.5">{desc}</div>}
-      </div>
-      <Switch checked={checked} onCheckedChange={onCheckedChange} aria-label={label} className="data-[state=checked]:bg-[var(--brand-accent)] shrink-0" />
-    </div>
-  )
-}
 
 /* Three-State Toggle Component */
-function ThreeStateToggle({
-  label,
-  desc,
-  value,
-  onChange,
-}: {
-  label: string
-  desc?: string
-  value: TechnicalPreferenceValue
-  onChange: (v: TechnicalPreferenceValue) => void
-}) {
-  return (
-    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-lg border border-border bg-accent/30 p-3.5 shadow-sm">
-      <div className="min-w-0">
-        <div className="font-semibold text-xs text-foreground/90 uppercase tracking-wider">{label}</div>
-        {desc && <div className="text-[11px] text-muted-foreground leading-normal mt-1">{desc}</div>}
-      </div>
-      <div className="flex bg-accent/60 rounded-lg p-0.5 border border-border/40 w-fit shrink-0">
-        {(["yes", "maybe", "no"] as const).map((opt) => {
-          const isActive = value === opt
-          const activeColors = {
-            yes: "bg-emerald-500/10 text-emerald-400 border-emerald-500/25",
-            maybe: "bg-amber-500/10 text-amber-400 border-amber-500/25",
-            no: "bg-rose-500/10 text-rose-400 border-rose-500/25",
-          }[opt]
-          return (
-            <button
-              key={opt}
-              type="button"
-              onClick={() => onChange(opt)}
-              className={cn(
-                "px-3 py-1 rounded-md text-[10px] font-mono uppercase font-bold tracking-wider transition-all border border-transparent cursor-pointer",
-                isActive
-                  ? activeColors
-                  : "text-foreground/45 hover:text-foreground/80 hover:bg-foreground/5"
-              )}
-            >
-              {opt}
-            </button>
-          )
-        })}
-      </div>
-    </div>
-  )
-}
 
 function safeInt(v: string, fallback: number) {
   const n = Number.parseInt(v)
   return Number.isFinite(n) ? n : fallback
+}
+
+/**
+ * P13: an investor is verified by their LinkedIn plus a check by hand. Founders then see
+ * "verified investor" next to their name when they commit.
+ */
+function VerificationSection({ profile, onChange }: { profile: InvestorProfile | null; onChange: (p: InvestorProfile) => void }) {
+  const v = profile?.verification
+  const [link, setLink] = useState("")
+  const [sending, setSending] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    setLink(v?.linkedin || profile?.linkedin || "")
+  }, [v?.linkedin, profile?.linkedin])
+
+  const submit = async () => {
+    if (!link.trim() || sending) return
+    setSending(true)
+    setError(null)
+    try {
+      const res = await apiClient.post<InvestorProfile>("/investor/verification", { linkedin: link.trim() })
+      onChange(res.data)
+    } catch (err) {
+      setError(apiError(err, "Couldn't send the request."))
+    } finally {
+      setSending(false)
+    }
+  }
+
+  const status = v?.status ?? "none"
+  return (
+    <Section title="Verification">
+      {status === "verified" ? (
+        <p className="text-[15px] leading-relaxed text-muted-foreground">
+          <span className="text-foreground">Verified</span>
+          {v?.reviewedAt ? ` on ${dateLabel(v.reviewedAt)}` : ""}. Founders see &ldquo;verified investor&rdquo; next to your name.
+        </p>
+      ) : status === "pending" ? (
+        <p className="text-[15px] leading-relaxed text-muted-foreground">
+          <span className="text-foreground">Waiting for review.</span> Sent {v?.submittedAt ? dateLabel(v.submittedAt) : ""} with{" "}
+          <a href={v?.linkedin} target="_blank" rel="noopener noreferrer" className="underline underline-offset-4">your LinkedIn</a>. Someone checks it by hand.
+        </p>
+      ) : (
+        <form onSubmit={(e) => { e.preventDefault(); submit() }} className="space-y-4">
+          <p className="text-[15px] leading-relaxed text-muted-foreground">
+            {status === "rejected"
+              ? <>Not approved: <span className="text-foreground">{v?.note}</span> You can send another link.</>
+              : "Add your LinkedIn and someone checks it by hand. Founders then see you're a verified investor."}
+          </p>
+          <input
+            aria-label="Your LinkedIn link"
+            value={link}
+            onChange={(e) => setLink(e.target.value)}
+            placeholder="linkedin.com/in/you"
+            className="h-11 w-full rounded-lg border border-input bg-transparent px-3.5 text-base text-foreground placeholder:text-muted-foreground focus:border-muted-foreground focus:outline-none"
+          />
+          {error && <p role="alert" className="text-[15px] text-destructive">{error}</p>}
+          <button type="submit" disabled={!link.trim() || sending} className={pillClass}>{sending ? "Sending…" : "Ask to be verified"}</button>
+        </form>
+      )}
+    </Section>
+  )
 }

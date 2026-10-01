@@ -1,0 +1,21 @@
+chat/.state.json
+chat/prompts.md
+
+# editor backups / swap / undo files (they can hold .env history)
+*~
+*.swp
+*.un~
+
+# macOS Finder metadata
+.DS_Store
+
+# Python agent service (agent/): local venv, secrets and caches
+agent/.venv/
+agent/.env
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Eval reports (synthetic data, regenerated per run)
+agent/evals/results/

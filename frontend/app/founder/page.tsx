@@ -1,561 +1,254 @@
 "use client"
 
-import { useState, useEffect } from "react"
-import apiClient from "@/lib/axios"
+import { useEffect, useState } from "react"
 import Link from "next/link"
-import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { cn } from "@/lib/utils"
-import {
-  TrendingUp, ArrowUpRight, ArrowRight,
-  Loader2, AlertTriangle, PenLine, CheckCircle2, Clock, Lock,
-  Coins, Lightbulb, Users, MessageSquare, Info, X, HelpCircle
-} from "lucide-react"
+import { useRouter } from "next/navigation"
+import apiClient from "@/lib/axios"
+import { useAuth } from "@/components/auth-provider"
+import { Aside, Main, Page, PageTitle, Section, Split, countOf, greeting, pillClass, quietLinkClass, relativeTime, usd } from "@/components/shell/page"
+import { GettingStarted, type Step } from "@/components/shell/getting-started"
+import { labelFor } from "@/lib/taxonomy"
+import { apiError, cn } from "@/lib/utils"
+import { saveIdeaDraft } from "@/lib/idea-draft"
+import { IdeaPrivacyNote } from "@/components/idea-privacy-note"
+import { TRIED_SOMETHING_KEY } from "@/lib/first-run"
+import { IdeaCover } from "@/components/visual/idea-cover"
+import { MilestoneMeter } from "@/components/visual/idea-card"
+import { MoneyPanel } from "@/components/visual/money-panel"
+import { LeaderboardCard } from "@/components/community/leaderboard-card"
+import { SkeletonRows } from "@/components/visual/skeleton"
+import { MatchedIdeas } from "@/components/matching/matched-ideas"
 
-import { PageHeader } from "@/components/page-header"
-import { OnboardingModal } from "@/components/onboarding-modal"
+type Idea = {
+  _id: string
+  title: string
+  stage?: string
+  tags?: string[]
+  isDraft?: boolean
+  likes?: number
+  comments?: number
+  createdAt?: string
+  milestones?: { status: "open" | "done" }[]
+}
+type Notification = { id: string; text: string; timestamp: string; read: boolean }
+type Overview = {
+  kpis: { ideas: number; teamMembers: number }
+  totals: { committed: number; released: number; investors: number }
+  committedByIdea: Record<string, number>
+  team: { id: string; name: string; role: string; isYou: boolean }[]
+  activity: { id: string; kind: string; text: string; at: string; ideaId: string }[]
+}
+type Profile = { profileCompletion?: number; interests?: string[] }
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-interface KpiData { ideas: number; teamMembers: number; fundsRaised: string; unreadChats: number }
-interface Idea { id: string; title: string; status: "Funded" | "Seeking" | "Draft"; funding: string; stage: string; tags: string[]; fundedPct: number }
-interface TeamMember { id: string; initials: string; name: string; role: string; lastActive: string }
-interface ActivityItem { id: string; text: string; timestamp: string; important?: boolean }
-interface OverviewData { kpis: KpiData; ideas: Idea[]; team: TeamMember[]; activity: ActivityItem[]; escrow: { raised: number; goal: number } }
-
-// ─── API ─────────────────────────────────────────────────────────────────────
-const overviewAPI = {
-  async getOverviewData(): Promise<OverviewData> {
-    try {
-      const r = await apiClient.get<OverviewData>("/founder/overview")
-      return r.data
-    } catch {
-      return {
-        kpis: { ideas: 0, teamMembers: 0, fundsRaised: '$0', unreadChats: 0 },
-        ideas: [],
-        team: [],
-        activity: [],
-        escrow: { raised: 0, goal: 0 },
-      }
-    }
-  },
+// What each kind of activity looks like: money in gold, finished things in green.
+const ACTIVITY_DOT: Record<string, string> = {
+  commit: "bg-gold",
+  release: "bg-done",
+  comment: "bg-foreground",
+  team: "bg-[#6ea8fe]",
+  like: "bg-muted-foreground",
 }
 
-// ─── Count-up ─────────────────────────────────────────────────────────────────
-function useCountUp(target: number, duration = 900) {
-  const [count, setCount] = useState(0)
-  useEffect(() => {
-    if (target === 0) { setCount(0); return }
-    let cur = 0
-    const inc = target / 36
-    const t = setInterval(() => {
-      cur += inc
-      if (cur >= target) { setCount(target); clearInterval(t) }
-      else setCount(Math.floor(cur))
-    }, duration / 36)
-    return () => clearInterval(t)
-  }, [target, duration])
-  return count
-}
-
-// ─── Page ─────────────────────────────────────────────────────────────────────
-export default function FounderOverviewPage() {
-  const [data, setData]       = useState<OverviewData | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError]     = useState<string | null>(null)
-  const [greeting, setGreeting] = useState("")
-  const [dateStr, setDateStr]   = useState("")
-
-  // Onboarding
-  const [onboardingPlan, setOnboardingPlan] = useState("something")
-  const [onboardingName, setOnboardingName] = useState("Founder")
-
-  // Interactive help banners
-  const [showWorkspaceGuide, setShowWorkspaceGuide] = useState(true)
-  const [showEscrowHelp, setShowEscrowHelp] = useState(false)
-  const [showIdeasHelp, setShowIdeasHelp] = useState(false)
-  const [showLeaderboardHelp, setShowLeaderboardHelp] = useState(false)
-  const [showTeamHelp, setShowTeamHelp] = useState(false)
-  const [showActivityHelp, setShowActivityHelp] = useState(false)
+/**
+ * Founder home: say what you're working on, what needs you, your ideas, your team and what has
+ * happened lately. Everything comes from the server; there are no sample numbers.
+ */
+export default function FounderHome() {
+  const { user } = useAuth()
+  const router = useRouter()
+  const [draft, setDraft] = useState("")
+  const [ideas, setIdeas] = useState<Idea[] | null>(null)
+  const [notes, setNotes] = useState<Notification[] | null>(null)
+  const [overview, setOverview] = useState<Overview | null>(null)
+  const [profile, setProfile] = useState<Profile | null>(null)
+  const [triedSomething, setTriedSomething] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      setOnboardingPlan(localStorage.getItem("selected_plan") || "something")
-      setOnboardingName(localStorage.getItem("demo_name") || "Founder")
-      const dismissed = localStorage.getItem("workspace_guide_dismissed")
-      if (dismissed === "true") {
-        setShowWorkspaceGuide(false)
-      }
+    apiClient.get<Idea[]>("/ideas/user").then((r) => setIdeas(r.data)).catch((err) => {
+      setIdeas([])
+      setError(apiError(err, "Couldn't load your ideas."))
+    })
+    apiClient.get<Notification[]>("/notifications").then((r) => setNotes(r.data)).catch(() => setNotes([]))
+    apiClient.get<Overview>("/founder/overview").then((r) => setOverview(r.data)).catch(() => setOverview(null))
+    // Answers from the Something box land on the profile and ideas; refresh what depends on them.
+    const refresh = () => {
+      apiClient.get<Profile>("/founder/profile").then((r) => setProfile(r.data)).catch(() => setProfile(null))
+      apiClient.get<Idea[]>("/ideas/user").then((r) => setIdeas(r.data)).catch(() => {})
     }
+    refresh()
+    window.addEventListener("profile:updated", refresh)
+    try { setTriedSomething(localStorage.getItem(TRIED_SOMETHING_KEY) === "1") } catch { /* private mode */ }
+    return () => window.removeEventListener("profile:updated", refresh)
   }, [])
 
-  useEffect(() => {
-    const d = new Date()
-    const h = d.getHours()
-    setGreeting(h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening")
-    setDateStr(d.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" }))
-    overviewAPI.getOverviewData()
-      .then(setData)
-      .catch(() => setError("Could not load overview."))
-      .finally(() => setLoading(false))
-  }, [])
+  const needsYou = notes?.filter((n) => !n.read) ?? null
+  const teammates = overview?.team.filter((m) => !m.isYou) ?? []
 
-  const dismissGuide = () => {
-    setShowWorkspaceGuide(false)
-    if (typeof window !== "undefined") {
-      localStorage.setItem("workspace_guide_dismissed", "true")
-    }
+  // One plain sentence instead of number tiles.
+  const summary = overview && ideas
+    ? [
+        ideas.length ? `${countOf(ideas.length, "idea")}${teammates.length ? `, ${countOf(teammates.length, "teammate")}` : ""}.` : "No ideas yet.",
+        overview.totals.committed > 0
+          ? `${countOf(overview.totals.investors, "investor")} committed ${usd(overview.totals.committed)}, ${usd(overview.totals.released)} released. No money moves on Something yet.`
+          : null,
+      ].filter(Boolean).join(" ")
+    : null
+
+  const steps: Step[] = profile && ideas ? [
+    { label: "Post your first idea", href: "/founder/ideas?new=true", done: ideas.length > 0 },
+    { label: `Finish your profile (${profile.profileCompletion ?? 0}% done)`, href: "/founder/profile", done: (profile.profileCompletion ?? 0) >= 100 },
+    { label: "Add the sectors you care about", href: "/founder/profile", done: (profile.interests ?? []).length > 0 },
+    { label: "Talk an idea through with Something", href: "/founder/something", done: triedSomething },
+  ] : []
+
+  const continueToPost = () => {
+    saveIdeaDraft(draft.trim())
+    router.push("/founder/ideas?new=true")
   }
 
-  if (loading) return (
-    <div className="flex items-center justify-center h-[60vh]">
-      <Loader2 className="h-5 w-5 animate-spin text-foreground/20" />
-    </div>
-  )
-  if (error || !data) return (
-    <div className="flex flex-col items-center justify-center h-[60vh] gap-3">
-      <AlertTriangle className="h-6 w-6 text-foreground/20" />
-      <p className="text-foreground/35 text-xs">{error}</p>
-    </div>
-  )
-
-  const { kpis, ideas, team, activity, escrow } = data
-  const escrowPct = Math.round((escrow.raised / escrow.goal) * 100)
-  const fundsRaw  = parseInt(kpis.fundsRaised.replace(/[^0-9]/g, "")) || 0
-
   return (
-    <div className="w-full pt-6 pb-24 px-6 xl:px-10 space-y-12">
-      {/* Onboarding modal — only shows once for new signups */}
-      <OnboardingModal role="founder" plan={onboardingPlan} userName={onboardingName} />
+    <Page>
+      <PageTitle title={greeting(user?.name)}>{summary}</PageTitle>
 
-      <PageHeader
-        category={`${greeting} — ${dateStr}`}
-        title="Workspace Overview"
-        description="Review milestone disbursements, coordinate cohort ideas, and track builder synchronization."
-        accentColor="amber"
-        action={
-          <div className="flex gap-2.5">
-            <Button asChild size="sm" className="h-8.5 rounded-full bg-foreground text-background hover:bg-foreground/90 hover:scale-[1.01] transition-all duration-300 font-semibold text-xs px-4.5 cursor-pointer" style={{ fontFamily: "var(--font-outfit)" }}>
-              <Link href="/founder/ideas" className="flex items-center gap-1.5"><PenLine className="h-3.5 w-3.5" />New idea</Link>
-            </Button>
-            <Button asChild size="sm" className="h-8.5 rounded-full bg-foreground/[0.02] border border-border/10 text-foreground/70 hover:text-foreground hover:bg-foreground/5 hover:border-border/20 transition-all duration-300 font-semibold text-xs px-4.5 cursor-pointer" style={{ fontFamily: "var(--font-outfit)" }}>
-              <Link href="/founder/funding" className="flex items-center gap-1.5"><TrendingUp className="h-3.5 w-3.5" />Milestones</Link>
-            </Button>
-          </div>
-        }
-      />
-
-      {/* ── Collapsible Workspace Guide Banner ── */}
-      {showWorkspaceGuide && (
-        <div className="relative overflow-hidden rounded-2xl border border-border/40 bg-foreground/[0.01] p-6 mb-8 transition-all duration-300 animate-fade-in">
-          <div className="absolute top-4 right-4">
-            <button
-              onClick={dismissGuide}
-              className="text-foreground/40 hover:text-foreground/80 transition-colors p-1.5 rounded-full hover:bg-foreground/5 cursor-pointer"
-              title="Dismiss Guide"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-
-          <div className="flex items-start gap-4">
-            <div className="p-2.5 rounded-xl bg-brand-accent/10 border border-brand-accent/20 shrink-0 text-brand-accent mt-0.5">
-              <Info className="h-5 w-5" />
+      {/* Phones: box → Needs you → ideas. Laptops: box and ideas on the left, Needs you on the right. */}
+      <Split className="mt-12">
+        <Main>
+          <form onSubmit={(e) => { e.preventDefault(); continueToPost() }}>
+            <label htmlFor="idea-draft" className="block text-lg text-foreground">What are you working on?</label>
+            <textarea
+              id="idea-draft"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              rows={3}
+              maxLength={500}
+              placeholder="A sentence or two is enough. You can add details later."
+              className="mt-4 w-full resize-none rounded-xl border border-input bg-transparent px-4 py-3 text-base leading-relaxed text-foreground placeholder:text-muted-foreground focus:border-muted-foreground focus:outline-none xl:min-h-32"
+            />
+            <IdeaPrivacyNote className="mt-2" />
+            <div className="mt-4 flex items-center gap-5">
+              <button type="submit" className={pillClass}>
+                {draft.trim() ? "Continue" : "Post an idea"}
+              </button>
+              <Link href="/founder/something" className={quietLinkClass}>Talk it through with Something first</Link>
             </div>
-            <div className="space-y-4 pr-6">
-              <div>
-                <h3 className="text-sm font-semibold text-foreground tracking-wide" style={{ fontFamily: "var(--font-outfit)" }}>
-                  Workspace Navigation Guide
-                </h3>
-                <p className="text-xs text-foreground/50 leading-relaxed mt-1">
-                  Welcome to the Workspace! Here is a brief explanation of how cohort collaboration and milestone-based funding flow:
-                </p>
-              </div>
+          </form>
+        </Main>
 
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-2">
-                <div className="space-y-1">
-                  <div className="text-[10px] font-mono uppercase tracking-wider text-brand-accent font-semibold">1. Submission & Tags</div>
-                  <p className="text-[11px] text-foreground/45 leading-relaxed">
-                    Submit project proposals under <Link href="/founder/ideas" className="underline hover:text-foreground">Ideas</Link>. Tag them with relevant domains to coordinate reviews.
-                  </p>
-                </div>
-                <div className="space-y-1">
-                  <div className="text-[10px] font-mono uppercase tracking-wider text-amber-500/80 font-semibold">2. Cohort Upvotes</div>
-                  <p className="text-[11px] text-foreground/45 leading-relaxed">
-                    Ideas gain backing from the cohort community. Ranks are synced real-time based on upvote conviction weights.
-                  </p>
-                </div>
-                <div className="space-y-1">
-                  <div className="text-[10px] font-mono uppercase tracking-wider text-emerald-500/80 font-semibold">3. Milestone Payouts</div>
-                  <p className="text-[11px] text-foreground/45 leading-relaxed">
-                     escrow disbursements are released as you complete each phase. Submit proof requirements to verify and unlock funds.
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Alert banner — only shown when API returns pending milestones ── */}
-      {data.activity.some(a => a.important) && (
-        <div className="relative overflow-hidden rounded-2xl border border-border/40 bg-[#C88E72]/[0.02] py-4 px-5 mb-8">
-          <div className="flex flex-col sm:flex-row sm:items-center gap-4 relative z-10">
-            <div className="flex items-center gap-2 shrink-0">
-              <span className="relative flex h-1.5 w-1.5">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#C88E72] opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-[#C88E72]"></span>
-              </span>
-              <span className="text-[9px] font-mono uppercase tracking-[0.15em] text-[#C88E72] font-semibold">Verification Alert</span>
-            </div>
-            <p className="flex-1 text-[12.5px] text-foreground/60 leading-relaxed font-sans">
-              {data.activity.find(a => a.important)?.text}
-            </p>
-            <Link href="/founder/funding" className="shrink-0 text-xs font-medium text-[#C88E72] hover:text-[#C88E72]/85 transition-colors flex items-center gap-1 self-start sm:self-auto group font-sans">
-              View funding <ArrowRight className="h-3.5 w-3.5 group-hover:translate-x-0.5 transition-transform" />
-            </Link>
-          </div>
-        </div>
-      )}
-
-      {/* ── KPI Stats Cards Grid ── */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-8 mb-16">
-        <KpiStatCard label="Funds raised" rawValue={fundsRaw} isCurrency sub={kpis.fundsRaised !== "$0" ? "This funding cycle" : "No funds yet"} icon={Coins} />
-        <KpiStatCard label="Active ideas" rawValue={kpis.ideas} sub={kpis.ideas === 1 ? "1 in progress" : `${kpis.ideas} in progress`} icon={Lightbulb} />
-        <KpiStatCard label="Team members" rawValue={kpis.teamMembers} sub={kpis.teamMembers > 0 ? "All active" : "No members yet"} icon={Users} />
-        <KpiStatCard label="Unread chats" rawValue={kpis.unreadChats} sub={kpis.unreadChats > 0 ? `${kpis.unreadChats} unread` : "All caught up"} icon={MessageSquare} />
-      </div>
-
-      {/* ── Grid Layout with Breathing Space ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-12 xl:gap-14">
-
-        {/* ── Left column (3/5): Escrow + Ideas ── */}
-        <div className="lg:col-span-3 space-y-10">
-
-          {/* Milestone Escrow Pool Card */}
-          <div className="rounded-2xl border border-border/15 bg-card/10 backdrop-blur-xl p-8 hover:border-border/30 hover:bg-card/15 transition-all duration-300 shadow-sm hover:shadow-md">
-            <div className="flex items-start justify-between gap-4 border-b border-border/5 pb-4 mb-6">
-              <div className="space-y-1">
-                <div className="flex items-center gap-2">
-                  <SectionLabel>Milestone Escrow Pool</SectionLabel>
-                  <button
-                    onClick={() => setShowEscrowHelp(!showEscrowHelp)}
-                    className="text-foreground/30 hover:text-foreground/60 p-0.5 rounded-full transition-colors cursor-pointer"
-                    title="What is this?"
-                  >
-                    <HelpCircle className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-                <p className="text-xs text-foreground/45">Funds held in secure multi-signature escrow.</p>
-              </div>
-              <div className="flex items-baseline gap-1.5 shrink-0">
-                <span className="text-xs text-foreground/35">Released</span>
-                <span className="text-2xl font-serif font-light text-[#C88E72]">{escrowPct}%</span>
-              </div>
-            </div>
-
-            {/* Escrow Help Sub-banner */}
-            {showEscrowHelp && (
-              <div className="p-3.5 mb-5 text-[11px] text-foreground/50 leading-relaxed bg-foreground/[0.02] border border-border/10 rounded-xl animate-slide-down">
-                The milestone escrow pool locks project investments in smart contracts. Payouts are triggered sequentially as verification criteria are uploaded and verified by the cohort validators.
-              </div>
+        <Aside>
+          {overview && ideas && ideas.length > 0 && (
+            <MoneyPanel
+              className="mb-14 hidden xl:block"
+              rows={[
+                { label: "Committed to you", value: usd(overview.totals.committed), tone: "gold" },
+                { label: "Released", value: usd(overview.totals.released), tone: overview.totals.released > 0 ? "done" : "plain" },
+                { label: overview.totals.investors === 1 ? "Investor" : "Investors", value: String(overview.totals.investors) },
+                { label: ideas.length === 1 ? "Idea" : "Ideas", value: String(ideas.length) },
+              ]}
+              note="No money moves on Something yet."
+            />
+          )}
+          <Section title="Needs you">
+            {needsYou === null ? (
+              <SkeletonRows />
+            ) : needsYou.length === 0 ? (
+              <p className="text-[15px] text-muted-foreground">Nothing right now. Comments, requests and commitments show up here.</p>
+            ) : (
+              <ul className="divide-y divide-border">
+                {needsYou.slice(0, 5).map((n) => (
+                  <li key={n.id} className="flex items-baseline justify-between gap-6 py-4">
+                    <span className="text-[15px] leading-relaxed">{n.text}</span>
+                    <span className="shrink-0 text-xs text-muted-foreground">{relativeTime(n.timestamp)}</span>
+                  </li>
+                ))}
+              </ul>
             )}
+          </Section>
 
-            <div className="flex items-baseline gap-2 mb-5">
-              <span className="text-3xl font-serif font-light tracking-tight text-foreground">
-                ${escrow.raised.toLocaleString()}
-              </span>
-              <span className="text-xs font-mono text-foreground/30">/ ${escrow.goal.toLocaleString()} total</span>
-            </div>
-
-            <div className="h-1 w-full bg-foreground/[0.04] rounded-full overflow-hidden mb-6 relative">
-              <div
-                className="h-full bg-brand-accent/70 transition-all duration-1000"
-                style={{ width: `${escrowPct}%` }}
-              />
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-5">
-              {[
-                { label: "Whitepaper & Specs",    amount: "$40K", done: true,  pending: false },
-                { label: "Alpha & Sync Engine",   amount: "$40K", done: false, pending: true  },
-                { label: "Security Audit & Beta", amount: "$40K", done: false, pending: false },
-                { label: "Mainnet Launch",        amount: "$80K", done: false, pending: false },
-              ].map((m, i) => (
-                <div key={i} className="space-y-3.5 py-5 px-4.5 rounded-xl border border-border/[0.03] hover:border-border/[0.08] hover:bg-foreground/[0.015] transition-all">
-                  <div className="flex items-center justify-between">
-                    <span className={cn("text-[10px] font-mono font-semibold",
-                      m.done ? "text-foreground/75" : m.pending ? "text-[#C88E72]" : "text-foreground/18"
-                    )}>{m.amount}</span>
-                    <div className={cn(
-                      "size-4 rounded-full border grid place-items-center",
-                      m.done ? "bg-brand-accent/10 border-brand-accent/30 text-brand-accent" :
-                      m.pending ? "bg-[#C88E72]/10 border-[#C88E72]/30 text-[#C88E72] animate-pulse" :
-                      "bg-foreground/[0.01] border-border/10 text-foreground/10"
-                    )}>
-                      {m.done    ? <CheckCircle2 className="h-2.5 w-2.5" />
-                       : m.pending ? <Clock className="h-2.5 w-2.5" />
-                       : <Lock className="h-2.5 w-2.5" />}
-                    </div>
-                  </div>
-                  <div>
-                    <p className={cn("text-[11px] font-semibold leading-snug",
-                      m.done ? "text-foreground/80" : m.pending ? "text-foreground/60" : "text-foreground/25"
-                    )}>{m.label}</p>
-                    <p className={cn("text-[8px] font-mono uppercase tracking-[0.12em] mt-1.5",
-                      m.done ? "text-brand-accent/70" : m.pending ? "text-[#C88E72]/70" : "text-foreground/18"
-                    )}>
-                      {m.done ? "Released" : m.pending ? "Pending" : "Locked"}
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Your Ideas Card */}
-          <div className="rounded-2xl border border-border/15 bg-card/10 backdrop-blur-xl p-8 hover:border-border/30 hover:bg-card/15 transition-all duration-300 shadow-sm hover:shadow-md">
-            <div className="flex items-start justify-between border-b border-border/5 pb-4 mb-6">
-              <div className="space-y-1">
-                <div className="flex items-center gap-2">
-                  <SectionLabel>Your ideas</SectionLabel>
-                  <button
-                    onClick={() => setShowIdeasHelp(!showIdeasHelp)}
-                    className="text-foreground/30 hover:text-foreground/60 p-0.5 rounded-full transition-colors cursor-pointer"
-                    title="What is this?"
-                  >
-                    <HelpCircle className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-                <p className="text-xs text-foreground/45">Submission status and funding tracking.</p>
-              </div>
-              <Link href="/founder/ideas" className="text-[10px] font-mono uppercase tracking-[0.15em] text-brand-accent hover:text-brand-accent/75 transition-colors flex items-center gap-1 font-semibold">
-                All ideas <ArrowRight className="h-3 w-3" />
-              </Link>
-            </div>
-
-            {/* Ideas Help Sub-banner */}
-            {showIdeasHelp && (
-              <div className="p-3.5 mb-5 text-[11px] text-foreground/50 leading-relaxed bg-foreground/[0.02] border border-border/10 rounded-xl animate-slide-down">
-                Review, draft, and post workspace project concepts. Once concept requirements are complete, submit them to switch their status from Draft to Seeking for cohort backing.
-              </div>
+          <Section title="Team">
+            {overview === null ? (
+              <SkeletonRows />
+            ) : teammates.length === 0 ? (
+              <p className="text-[15px] leading-relaxed text-muted-foreground">
+                Just you so far. When someone asks to join an idea, invite them from that chat. <Link href="/founder/teams" className="text-foreground underline underline-offset-4">Teams</Link>
+              </p>
+            ) : (
+              <ul className="divide-y divide-border">
+                {overview.team.map((m) => (
+                  <li key={m.id} className="flex items-baseline justify-between gap-6 py-3">
+                    <span className="text-[15px]">{m.isYou ? "You" : m.name}</span>
+                    <span className="truncate text-xs text-muted-foreground">{m.role}</span>
+                  </li>
+                ))}
+              </ul>
             )}
+          </Section>
 
-            <div className="divide-y divide-border/5">
-              {ideas.map((idea) => (
-                <IdeaRow key={idea.id} idea={idea} />
-              ))}
-            </div>
-          </div>
-        </div>
+          <LeaderboardCard kind="ideas" role="founder" title="Top ideas" />
+        </Aside>
 
-        {/* ── Right column (2/5): Team + Activity ── */}
-        <div className="lg:col-span-2 space-y-8">
+        <Main>
+          <GettingStarted steps={steps} />
 
-          {/* Cohort Leaderboard Card */}
-          <div className="rounded-2xl border border-border/15 bg-card/10 backdrop-blur-xl p-8 hover:border-border/30 hover:bg-card/15 transition-all duration-300 shadow-sm hover:shadow-md">
-            <div className="border-b border-border/5 pb-3 mb-5">
-              <div className="flex items-center gap-2">
-                <SectionLabel>Cohort Leaderboard</SectionLabel>
-                <button
-                  onClick={() => setShowLeaderboardHelp(!showLeaderboardHelp)}
-                  className="text-foreground/30 hover:text-foreground/60 p-0.5 rounded-full transition-colors cursor-pointer"
-                  title="What is this?"
-                >
-                  <HelpCircle className="h-3.5 w-3.5" />
-                </button>
-              </div>
-              <p className="text-[11px] text-foreground/45 mt-1 font-sans">Top projects by upvote conviction.</p>
-            </div>
-
-            {showLeaderboardHelp && (
-              <div className="p-3 mb-4 text-[11px] text-foreground/50 leading-relaxed bg-foreground/[0.02] border border-border/10 rounded-xl animate-slide-down">
-                Community voting weights measure the conviction of cohort participants. The leaderboard ranks the most backed ideas, which receive funding release priority.
-              </div>
+          <Section title="Your ideas" action={ideas && ideas.length > 0 ? <Link href="/founder/ideas" className="hover:text-foreground">All ideas</Link> : undefined}>
+            {error ? (
+              <p className="text-[15px] text-destructive">{error}</p>
+            ) : ideas === null ? (
+              <SkeletonRows />
+            ) : ideas.length === 0 ? (
+              <p className="text-[15px] text-muted-foreground">Your ideas will be listed here once you post one.</p>
+            ) : (
+              <ul className="divide-y divide-border">
+                {ideas.slice(0, 5).map((idea) => (
+                  <li key={idea._id}>
+                    <Link href={`/founder/ideas/${idea._id}`} className="group flex items-center gap-4 py-4">
+                      <IdeaCover id={idea._id} sectors={idea.tags} className="size-14 shrink-0" rounded="rounded-xl" />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex items-baseline justify-between gap-6">
+                          <span className="truncate text-base text-foreground group-hover:underline underline-offset-4">{idea.title}</span>
+                          <span className="shrink-0 text-xs text-muted-foreground">{relativeTime(idea.createdAt)}</span>
+                        </span>
+                        <span className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                          {idea.isDraft && <span className="rounded-full border border-line px-2 py-0.5 text-foreground">Draft</span>}
+                          <span>{idea.stage ? labelFor("ideaStages", idea.stage) : "No stage yet"}</span>
+                          {(overview?.committedByIdea[idea._id] ?? 0) > 0 && (
+                            <span className="text-gold">{usd(overview!.committedByIdea[idea._id])} committed</span>
+                          )}
+                          <MilestoneMeter milestones={idea.milestones} />
+                          <span>{countOf(idea.likes ?? 0, "supporter")}</span>
+                          <span>{countOf(idea.comments ?? 0, "comment")}</span>
+                        </span>
+                      </span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
             )}
+          </Section>
 
-            <div className="space-y-3">
-              <div className="text-[11px] text-foreground/30 font-mono uppercase tracking-wider py-8 text-center">No submissions yet</div>
-            </div>
-          </div>
+          <MatchedIdeas role="founder" />
 
-          {/* Team Sync Card */}
-          <div className="rounded-2xl border border-border/15 bg-card/10 backdrop-blur-xl p-8 hover:border-border/30 hover:bg-card/15 transition-all duration-300 shadow-sm hover:shadow-md">
-            <div className="border-b border-border/5 pb-3 mb-5">
-              <div className="flex items-center gap-2">
-                <SectionLabel>Team synchronization</SectionLabel>
-                <button
-                  onClick={() => setShowTeamHelp(!showTeamHelp)}
-                  className="text-foreground/30 hover:text-foreground/60 p-0.5 rounded-full transition-colors cursor-pointer"
-                  title="What is this?"
-                >
-                  <HelpCircle className="h-3.5 w-3.5" />
-                </button>
-              </div>
-              <p className="text-[11px] text-foreground/45 mt-1 font-sans">Real-time presence and active roles.</p>
-            </div>
-
-            {showTeamHelp && (
-              <div className="p-3 mb-4 text-[11px] text-foreground/50 leading-relaxed bg-foreground/[0.02] border border-border/10 rounded-xl animate-slide-down">
-                Real-time active status of build partners linked to this workspace repo. Shows active sync status of members and roles.
-              </div>
+          <Section title="Recent activity">
+            {overview === null ? (
+              <SkeletonRows />
+            ) : overview.activity.length === 0 ? (
+              <p className="text-[15px] text-muted-foreground">Nothing yet. Supporters, comments and commitments on your ideas show up here.</p>
+            ) : (
+              <ul className="divide-y divide-border">
+                {overview.activity.map((a) => (
+                  <li key={a.id} className="flex items-baseline justify-between gap-6 py-4">
+                    <Link href={`/founder/ideas/${a.ideaId}`} className="flex items-baseline gap-3 text-[15px] leading-relaxed hover:underline underline-offset-4">
+                      <span className={cn("size-2 shrink-0 translate-y-[-1px] rounded-full", ACTIVITY_DOT[a.kind] ?? "bg-line")} aria-hidden="true" />
+                      {a.text}
+                    </Link>
+                    <span className="shrink-0 text-xs text-muted-foreground">{relativeTime(a.at)}</span>
+                  </li>
+                ))}
+              </ul>
             )}
-
-            <div className="space-y-1.5">
-              {team.map((m) => (
-                <div key={m.id} className="flex items-center gap-3 py-3 px-2 rounded-xl hover:bg-foreground/[0.02] transition-all cursor-default border border-transparent hover:border-border/5">
-                  <div className="h-7.5 w-7.5 rounded-full bg-foreground/[0.04] border border-border/10 text-foreground/60 text-[9px] font-bold grid place-items-center shrink-0 font-mono">
-                    {m.initials}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-[11px] font-semibold text-foreground/85 truncate">{m.name}</div>
-                    <div className="text-[9px] text-foreground/35 font-mono mt-0.5 uppercase tracking-wide truncate">{m.role}</div>
-                  </div>
-                  <span className="text-[9px] font-mono text-foreground/25 shrink-0 tabular-nums">{m.lastActive}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Recent Activity Card */}
-          <div className="rounded-2xl border border-border/15 bg-card/10 backdrop-blur-xl p-8 hover:border-border/30 hover:bg-card/15 transition-all duration-300 shadow-sm hover:shadow-md">
-            <div className="border-b border-border/5 pb-3 mb-5">
-              <div className="flex items-center gap-2">
-                <SectionLabel>Recent activity</SectionLabel>
-                <button
-                  onClick={() => setShowActivityHelp(!showActivityHelp)}
-                  className="text-foreground/30 hover:text-foreground/60 p-0.5 rounded-full transition-colors cursor-pointer"
-                  title="What is this?"
-                >
-                  <HelpCircle className="h-3.5 w-3.5" />
-                </button>
-              </div>
-              <p className="text-[11px] text-foreground/45 mt-1 font-sans">System updates and interactions.</p>
-            </div>
-
-            {showActivityHelp && (
-              <div className="p-3 mb-4 text-[11px] text-foreground/50 leading-relaxed bg-foreground/[0.02] border border-border/10 rounded-xl animate-slide-down">
-                A rolling feed tracking key system-level transactions, milestone verification updates, and team changes.
-              </div>
-            )}
-
-            <div className="space-y-1.5">
-              {activity.map((item) => {
-                const getActivityHref = (text: string) => {
-                  const lower = text.toLowerCase()
-                  if (lower.includes("message") || lower.includes("sent")) return "/founder/chats"
-                  if (lower.includes("payout") || lower.includes("released") || lower.includes("funding")) return "/founder/funding"
-                  if (lower.includes("edge vision")) return "/founder/ideas"
-                  if (lower.includes("local‑first") || lower.includes("local-first")) return "/founder/ideas"
-                  return "/founder/ideas"
-                }
-                return (
-                  <Link
-                    key={item.id}
-                    href={getActivityHref(item.text)}
-                    className="flex items-start gap-3 py-3 px-2.5 rounded-xl hover:bg-foreground/[0.02] transition-all cursor-pointer block border border-transparent hover:border-border/5"
-                  >
-                    <span className={cn(
-                      "mt-[6px] h-1.5 w-1.5 rounded-full shrink-0",
-                      item.important ? "bg-[#C88E72]" : "bg-foreground/12"
-                    )} />
-                    <div className="flex-1 min-w-0">
-                      <p className={cn("text-[11.5px] leading-relaxed", item.important ? "text-foreground/80 font-medium" : "text-foreground/45 hover:text-foreground/75")}>
-                        {item.text}
-                      </p>
-                      <span className="text-[8px] font-mono text-foreground/25 uppercase tracking-wider mt-1 block">{item.timestamp}</span>
-                    </div>
-                  </Link>
-                )
-              })}
-            </div>
-          </div>
-
-        </div>
-      </div>
-
-    </div>
-  )
-}
-
-// ─── Shared Components ─────────────────────────────────────────────────────────
-function SectionLabel({ children, className }: { children: React.ReactNode; className?: string }) {
-  return (
-    <p className={cn("text-[9px] font-mono uppercase tracking-[0.2em] text-foreground/40", className)}>
-      {children}
-    </p>
-  )
-}
-
-function KpiStatCard({ label, rawValue, isCurrency, sub, icon: Icon }: {
-  label: string; rawValue: number; isCurrency?: boolean; sub: string; icon: any
-}) {
-  const count   = useCountUp(rawValue)
-  const display = isCurrency ? `$${count.toLocaleString()}` : count.toString()
-  return (
-    <div className="group relative overflow-hidden rounded-2xl border border-border/15 bg-card/10 backdrop-blur-xl hover:bg-card/15 hover:border-border/40 transition-all duration-300 p-6 cursor-default shadow-sm hover:shadow-md">
-      <div className="flex justify-between items-center">
-        <span className="text-xs text-foreground/45 font-sans font-light tracking-wide">{label}</span>
-        <Icon className="h-4 w-4 text-foreground/30 group-hover:text-brand-accent transition-colors duration-300" />
-      </div>
-      <div className="text-3xl font-serif font-light text-foreground/95 mt-3 tracking-tight group-hover:scale-[1.01] duration-300 origin-left transition-transform">
-        {display}
-      </div>
-      <div className="text-[10px] text-foreground/30 font-sans font-light mt-2">{sub}</div>
-    </div>
-  )
-}
-
-function IdeaRow({ idea }: { idea: Idea }) {
-  const s = {
-    Funded:  { text: "text-brand-accent", bg: "bg-brand-accent/5", border: "border-brand-accent/10" },
-    Seeking: { text: "text-[#C88E72]",  bg: "bg-[#C88E72]/5",  border: "border-[#C88E72]/10" },
-    Draft:   { text: "text-foreground/30",  bg: "bg-foreground/[0.01]",  border: "border-border/5" },
-  }[idea.status]
-
-  return (
-    <div className="group relative py-5 flex flex-col md:flex-row md:items-center justify-between gap-4 transition-all duration-200 hover:px-2 rounded-lg -mx-2 hover:bg-foreground/[0.01]">
-      <div className="flex-1 space-y-1.5">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-sm font-semibold text-foreground/80 group-hover:text-brand-accent transition-colors duration-300">
-            {idea.title}
-          </span>
-          <Badge className={cn("text-[9px] font-semibold uppercase tracking-widest px-2 py-0.5 border rounded-full shrink-0", s.text, s.bg, s.border)}>
-            {idea.status}
-          </Badge>
-          <span className="text-[9px] font-mono text-foreground/35 uppercase tracking-widest bg-foreground/[0.03] border border-border/5 px-2 py-0.5 rounded">{idea.stage}</span>
-        </div>
-        
-        {/* Tags */}
-        <div className="flex gap-1.5 flex-wrap">
-          {idea.tags.map((tag) => (
-            <span key={tag} className="text-[9px] font-mono text-foreground/30 bg-foreground/[0.01] border border-border/[0.03] rounded px-1.5 py-0.5">
-              #{tag}
-            </span>
-          ))}
-        </div>
-      </div>
-
-      {/* Funding Progress */}
-      <div className="w-full md:w-48 space-y-1.5 shrink-0">
-        <div className="flex justify-between text-[9px] font-mono text-foreground/35">
-          <span>{idea.funding}</span>
-          <span className="font-semibold">{idea.fundedPct}%</span>
-        </div>
-        <div className="h-0.5 w-full rounded-full bg-foreground/[0.03] overflow-hidden">
-          <div
-            className={cn("h-full rounded-full transition-all duration-700",
-              idea.fundedPct === 100 ? "bg-brand-accent" : "bg-foreground/20"
-            )}
-            style={{ width: `${idea.fundedPct}%` }}
-          />
-        </div>
-      </div>
-
-      {/* Link button */}
-      <Link href={`/founder/ideas/${idea.id}`}
-        className="shrink-0 text-[10px] font-semibold text-foreground/60 hover:text-foreground transition-colors flex items-center gap-1 align-middle justify-center py-1.5 px-3 border border-border/10 hover:border-border/20 rounded-lg bg-transparent">
-        Explore <ArrowUpRight className="h-3 w-3 group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
-      </Link>
-    </div>
+          </Section>
+        </Main>
+      </Split>
+    </Page>
   )
 }

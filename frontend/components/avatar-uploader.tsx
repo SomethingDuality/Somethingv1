@@ -2,8 +2,7 @@
 
 import { useRef } from "react"
 import { cn } from "@/lib/utils"
-import { Button } from "@/components/ui/button"
-import { Camera } from "lucide-react"
+import { avatarTone } from "@/lib/visual"
 
 export function AvatarUploader({
   name,
@@ -27,16 +26,16 @@ export function AvatarUploader({
     .toUpperCase()
 
   return (
-    <div className={cn("flex items-center gap-3", className)}>
+    <div className={cn("flex items-center gap-4", className)}>
       <div
-        className="grid place-items-center overflow-hidden rounded-full bg-[#0f1012] ring-1 ring-white/10"
-        style={{ width: size, height: size }}
+        className="grid place-items-center overflow-hidden rounded-full"
+        style={{ width: size, height: size, backgroundColor: avatarTone(name || "?")[0], color: avatarTone(name || "?")[1] }}
       >
         {src ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={src || "/placeholder.svg"} alt="Profile photo" className="h-full w-full object-cover" />
         ) : (
-          <span className="text-sm font-medium text-white/80">{initials}</span>
+          <span className="text-[15px]">{initials}</span>
         )}
       </div>
       <div>
@@ -55,15 +54,13 @@ export function AvatarUploader({
             onChange(file, url)
           }}
         />
-        <Button
+        <button
           type="button"
-          variant="outline"
-          className="h-8 rounded-md border-white/10 text-white hover:bg-white/[0.06] bg-transparent"
+          className="text-[15px] text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
           onClick={() => inputRef.current?.click()}
         >
-          <Camera className="mr-2 h-4 w-4" />
-          Upload
-        </Button>
+          {src ? "Change photo" : "Upload photo"}
+        </button>
       </div>
     </div>
   )

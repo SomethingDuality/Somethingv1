@@ -1,0 +1,8 @@
+{
+  "_note": "USD per million tokens. Config, not code: update when prices change. Free-tier providers cost 0 but are logged.",
+  "claude-haiku-4-5-20251001": {"input": 1.0, "output": 5.0, "cache_read": 0.1, "cache_write": 1.25},
+  "claude-sonnet-5-5": {"input": 2.0, "output": 10.0, "cache_read": 0.2, "cache_write": 2.5},
+  "claude-opus-5-5": {"input": 4.0, "output": 20.0, "cache_read": 0.4, "cache_write": 5.0},
+  "jina-embeddings-v3": {"input": 0.0, "output": 0.0},
+  "default": {"input": 0.0, "output": 0.0}
+}

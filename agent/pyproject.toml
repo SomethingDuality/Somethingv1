@@ -1,0 +1,24 @@
+[project]
+name = "something-agent"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 140
+target-version = "py312"
+
+[tool.ruff.lint]
+# E722/BLE001: no bare or blind `except` (RabbitHole swallowed errors). Every allowed broad
+# catch carries a `# noqa: BLE001` with the reason it is logged or surfaced.
+select = ["E", "F", "W", "B", "BLE", "I", "UP"]
+ignore = ["E501", "B008", "UP017", "UP047"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app", "tests"]

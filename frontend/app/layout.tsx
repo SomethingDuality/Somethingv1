@@ -5,6 +5,7 @@ import "./globals.css"
 import { AuthProvider } from "@/components/auth-provider"
 import { AvatarProvider } from "@/components/avatar-context"
 import { ThemeProvider } from "@/components/theme-provider"
+import { Toaster } from "@/components/ui/sonner"
 
 export const metadata: Metadata = {
   title: "Something",
@@ -17,6 +18,14 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
   return (
     <html lang="en" className={`h-full ${GeistSans.variable}`} suppressHydrationWarning>
       <head>
+        {/* Every page except the landing uses the interior theme. Setting the class before the
+            first paint avoids a flash of the landing's font until React hydrates; the pages'
+            useInteriorTheme() keeps it right on client-side navigation. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `if(location.pathname!=="/")document.documentElement.classList.add("interior")`,
+          }}
+        />
         <meta name="theme-color" content="#0A0A0C" />
         {/* Google Fonts loaded via link — graceful fallback if offline */}
         <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -37,22 +46,22 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
                 margin: 0 !important;
                 padding: 0 !important;
               }
-              #___next, body > div {
-                min-height: 100vh !important;
-              }
             `,
           }}
         />
       </head>
       <body
         className={`${GeistSans.className} min-h-screen bg-background text-foreground antialiased`}
-        style={{ fontFamily: "var(--font-inter, system-ui, sans-serif)" }}
+        // The app shell swaps --app-font to Geist; the landing and sign-in pages keep Inter.
+        style={{ fontFamily: "var(--app-font, var(--font-inter, system-ui, sans-serif))" }}
       >
-        <ThemeProvider attribute="class" defaultTheme="dark" enableSystem>
+        <ThemeProvider attribute="class" forcedTheme="dark">
           <div className="min-h-screen bg-background text-foreground">
             <AuthProvider>
               <AvatarProvider>{children}</AvatarProvider>
             </AuthProvider>
+            {/* Top-center so toasts never sit on the floating Something box (bottom-right). */}
+            <Toaster position="top-center" richColors />
           </div>
         </ThemeProvider>
       </body>

@@ -2,7 +2,8 @@ const mongoose = require('mongoose');
 const { Portfolio } = require('../models/portfolio.model.js');
 const { Investor }  = require('../models/user.model.js');
 const { Idea }      = require('../models/ideas.model.js');
-const { pushNotification } = require('./notifications.controller.js');
+const { pushNotification, ideaLink } = require('../services/notifications.service.js');
+const { isPublicIdea } = require('../community/targets.js');
 const { incrementTrust }   = require('../utils/trust.util.js');
 const {
     publishInvestmentCommitted,
@@ -21,6 +22,13 @@ const assertInvestor = (req, res) => {
 
 
 
+// Finite and bounded: "Infinity" passes an isNaN check and would be stored (and served as null).
+const MAX_AMOUNT = 1e9;
+const validAmount = (amount) => {
+	const n = Number(amount);
+	return Number.isFinite(n) && n > 0 && n <= MAX_AMOUNT;
+};
+
 const commit = async (req, res) => {
 	if (!assertInvestor(req, res)) return;
 
@@ -29,14 +37,15 @@ const commit = async (req, res) => {
 	if (!ideaId || !mongoose.Types.ObjectId.isValid(ideaId)) {
 		return res.status(400).json({ success: false, message: 'Valid ideaId is required' });
 	}
-	if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) {
-		return res.status(400).json({ success: false, message: 'amount must be a positive number' });
+	if (!validAmount(amount)) {
+		return res.status(400).json({ success: false, message: 'Enter an amount between $1 and $1,000,000,000' });
 	}
 
 	try {
 		
-		const idea = await Idea.findById(ideaId).select('title founder_id').lean();
-		if (!idea) {
+		const idea = await Idea.findById(ideaId).select('title founder_id isDraft moderation').lean();
+		// Drafts and hidden ideas can't take commitments: to investors they don't exist.
+		if (!isPublicIdea(idea)) {
 			return res.status(404).json({ success: false, message: 'Idea not found' });
 		}
 
@@ -83,16 +92,20 @@ const commit = async (req, res) => {
 		if (idea.founder_id) {
 			const investor = await Investor
 				.findById(req.user._id)
-				.select('name firm')
+				.select('name firm verification.status')
 				.lean();
 
 			const investorName = investor?.name || 'An investor';
 			const firmSuffix   = investor?.firm ? ` (${investor.firm})` : '';
+			const verified     = investor?.verification?.status === 'verified' ? ', verified investor' : '';
 
 			await pushNotification(
 				idea.founder_id,
-				`${investorName}${firmSuffix} committed $${Number(amount).toLocaleString()} to your idea "${idea.title}"`
+				`${investorName}${firmSuffix}${verified} committed $${Number(amount).toLocaleString()} to your idea “${idea.title}”`,
+				{ link: '/founder/funding' }
 			);
+			// Money needs a name (C5): any ghost chat with this founder shows it from now on.
+			await require('../chat/chat.service.js').revealOnCommit({ investorId: req.user._id, founderId: idea.founder_id, ideaTitle: idea.title });
 		}
 
 		publishInvestmentCommitted({
@@ -123,7 +136,7 @@ const get_portfolio = async (req, res) => {
 			.findOne({ investor_id: req.user._id })
 			.populate({
 				path:   'investments.idea_id',
-				select: 'title stage tags founder_id author likes views'
+				select: 'title stage tags founder_id author likes views milestones'
 			})
 			.lean();
 
@@ -135,9 +148,25 @@ const get_portfolio = async (req, res) => {
 			});
 		}
 
+		// The founder behind each idea, as the same public card the idea page shows.
+		const { Founder } = require('../models/user.model.js');
+		const founderIds = portfolio.investments.map((inv) => inv.idea_id?.founder_id).filter(Boolean);
+		const founders = new Map((await Founder.find({ _id: { $in: founderIds } })
+			.select('name headline location avatar socials linkedin github').lean())
+			.map((f) => [String(f._id), {
+				id: f._id, name: f.name || '', headline: f.headline || '', location: f.location || '', avatarUrl: f.avatar || '',
+				links: {
+					linkedin: f.socials?.linkedin || f.linkedin || '',
+					github:   f.socials?.github   || f.github   || '',
+					website:  f.socials?.website  || '',
+					twitter:  f.socials?.twitter  || '',
+				},
+			}]));
+
 		const data = portfolio.investments.map((inv) => {
 			const idea = inv.idea_id;   
 			return {
+				founder:          idea?.founder_id ? founders.get(String(idea.founder_id)) || null : null,
 				id:               inv._id,
 				ideaId:           idea?._id || inv.idea_id,
 				name:             idea?.title      || 'Unknown',
@@ -148,7 +177,9 @@ const get_portfolio = async (req, res) => {
 				committed:        inv.amount_committed,
 				released:         inv.amount_released,
 				status:           inv.status,
-				committed_at:     inv.committed_at
+				committed_at:     inv.committed_at,
+				releases:         (inv.releases || []).map((r) => ({ amount: r.amount, milestoneId: r.milestone_id, at: r.at })),
+				milestones:       (idea?.milestones || []).map((m) => ({ id: m._id, title: m.title, status: m.status, doneAt: m.doneAt }))
 			};
 		});
 
@@ -205,13 +236,16 @@ async function release(req, res) {
 	if (!assertInvestor(req, res)) return;
 
 	const { investmentId } = req.params;
-	const { amount } = req.body;
+	const { amount, milestoneId } = req.body || {};
 
 	if (!mongoose.Types.ObjectId.isValid(investmentId)) {
 		return res.status(400).json({ success: false, message: 'Invalid investment ID' });
 	}
-	if (!amount || isNaN(Number(amount)) || Number(amount) <= 0) {
-		return res.status(400).json({ success: false, message: 'amount must be a positive number' });
+	if (milestoneId !== undefined && milestoneId !== null && !mongoose.Types.ObjectId.isValid(milestoneId)) {
+		return res.status(400).json({ success: false, message: 'Invalid milestone ID' });
+	}
+	if (!validAmount(amount)) {
+		return res.status(400).json({ success: false, message: 'Enter an amount between $1 and $1,000,000,000' });
 	}
 
 	try {
@@ -235,7 +269,19 @@ async function release(req, res) {
 			});
 		}
 
+		// A release can be for a milestone the founder marked done on this idea.
+		let milestone = null;
+		if (milestoneId) {
+			const ideaDoc = await Idea.findById(investment.idea_id).select('milestones').lean();
+			milestone = (ideaDoc?.milestones || []).find((m) => String(m._id) === String(milestoneId)) || null;
+			if (!milestone) return res.status(404).json({ success: false, message: 'Milestone not found on this idea' });
+			if (milestone.status !== 'done') {
+				return res.status(409).json({ success: false, message: 'The founder hasn\'t marked this milestone done yet' });
+			}
+		}
+
 		investment.amount_released += releaseAmount;
+		investment.releases.push({ amount: releaseAmount, milestone_id: milestone?._id ?? null, at: new Date() });
 
 		
 		if (investment.amount_released >= investment.amount_committed) {
@@ -267,7 +313,8 @@ async function release(req, res) {
 
 			await pushNotification(
 				idea.founder_id,
-				`${investorName}${firmSuffix} released $${releaseAmount.toLocaleString()} for "${idea.title}"`
+				`${investorName}${firmSuffix} released $${releaseAmount.toLocaleString()} for “${idea.title}”${milestone ? ` (milestone “${milestone.title}”)` : ''}`,
+				{ link: '/founder/funding' }
 			);
 		}
 

@@ -1,16 +1,27 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
+import Link from "next/link"
+import { IdeaReach } from "@/components/matching/matched-ideas"
 import { useParams, useRouter } from "next/navigation"
-import apiClient from "@/lib/axios"
-import { Badge } from "@/components/ui/badge"
-import { Card, CardContent } from "@/components/ui/card"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { ArrowLeft, MessageSquare, Heart, Loader2, AlertTriangle, ArrowBigUp, ArrowBigDown, Flag, Send, Share2, Download, Paperclip, Film, Volume2, FileText, Presentation, Coins } from "lucide-react"
-import { cn } from "@/lib/utils"
+import apiClient, { assetUrl } from "@/lib/axios"
+import { apiError } from "@/lib/utils"
+import { Aside, Main, Page, PageTitle, Section, Split, pillClass, quietLinkClass, relativeTime, usd } from "@/components/shell/page"
+import { FounderCard, type FounderCardData } from "@/components/founder-card"
+import { fileKind } from "@/lib/files"
+import { IdeaCover } from "@/components/visual/idea-cover"
+import { IdeaFacts } from "@/components/visual/idea-facts"
+import { MoneyPanel } from "@/components/visual/money-panel"
+import { IdeaUpdates } from "@/components/idea-updates"
+import { IdeaMilestones, toMilestone, type Milestone } from "@/components/idea-milestones"
+import { useAuth } from "@/components/auth-provider"
+import { labelFor } from "@/lib/taxonomy"
 import { toast } from "@/components/ui/use-toast"
+import { SkeletonRows } from "@/components/visual/skeleton"
+import { HiddenNotice, ReportButton } from "@/components/community/report-dialog"
+import { SupportButton } from "@/components/community/support-button"
+import { StartChatDialog } from "@/components/chat/start-chat-dialog"
+
 
 
 type Stage = "concept" | "prototype" | "mvp" | "launched"
@@ -23,7 +34,10 @@ export interface Attachment {
 }
 
 interface Idea {
+  /** A draft is visible only to its founder and is never matched to anyone. */
+  isDraft?: boolean
   id: string
+  founder_id?: string
   title: string
   author: string
   authorAvatar?: string
@@ -33,27 +47,33 @@ interface Idea {
   description: string
   lookingFor: string[]
   likes: number
+  supportedByMe?: boolean
   downvotes?: number
   commentsCount: number
   flagged?: boolean
   flagReason?: string
   attachments?: Attachment[]
-  communityTarget?: number
-  communityRaised?: number
-  investmentNeeded?: number
-  fundsGained?: number
-  fundsSpent?: number
+  views?: number
+  raising?: string
+  milestones?: Milestone[]
+  founder?: FounderCardData | null
+  team?: { name: string; role: string; isFounder: boolean }[]
+  commitments?: { count: number; total: number; released: number }
+  createdAt?: string
+  /** Only sent to the founder, and only when the idea is hidden or removed. */
+  moderation?: { state: "hidden" | "removed" }
 }
 
 interface Comment {
   id: string
   author: string
-  authorAvatar: string
+  authorId?: string
+  /** Only ever on the viewer's own comment. */
+  hidden?: "hidden" | "removed"
+  authorAvatar?: string   // the API doesn't send avatars yet
   text: string
   timestamp: string
 }
-
-const FALLBACK_IDEAS: Record<string, Idea> = {}
 
 export default function IdeaDetailsPage() {
   const router = useRouter()
@@ -66,256 +86,61 @@ export default function IdeaDetailsPage() {
   const [error, setError] = useState<string | null>(null)
 
   // Feedback states
-  const [userName, setUserName] = useState("")
-  const [userAvatar, setUserAvatar] = useState("")
+  const { user } = useAuth()
   const [commentInput, setCommentInput] = useState("")
-  const [flagReasonText, setFlagReasonText] = useState("")
-  const [isFlagModalOpen, setIsFlagModalOpen] = useState(false)
   
-  // Pledge states
-  const [isPledgeModalOpen, setIsPledgeModalOpen] = useState(false)
-  const [pledgeInput, setPledgeInput] = useState("")
-  const [customPledgeError, setCustomPledgeError] = useState<string | null>(null)
 
   const handleShareClick = () => {
     if (typeof window !== "undefined") {
       navigator.clipboard.writeText(window.location.href)
-      toast({
-        title: "Link Copied",
-        description: "Project specification link copied to your clipboard.",
-      })
+      toast({ title: "Link copied" })
     }
   }
 
-  const [isCollaborating, setIsCollaborating] = useState(false)
+  // "Ask to join" opens a chat request to this idea's founder (community C5).
+  const [joinOpen, setJoinOpen] = useState(false)
 
-  const handleCollaborate = async () => {
+
+  // No fallback to the sample projects: if the idea can't be loaded, say so and offer Retry.
+  const fetchData = useCallback(async () => {
     if (!id) return
-    setIsCollaborating(true)
+    setIsLoading(true)
+    setError(null)
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let ideaData: any
     try {
-      await apiClient.post(`/ideas/${id}/collaborate`)
-      toast({
-        title: "Request Sent",
-        description: "Collaboration request sent successfully. The founder has been notified.",
-      })
-    } catch (err: any) {
-      console.error(err)
-      const msg = err.response?.data?.message || "Failed to send collaboration request. Please try again."
-      toast({
-        title: "Error",
-        description: msg,
-        variant: "destructive",
-      })
-    } finally {
-      setIsCollaborating(false)
-    }
-  }
-
-
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      const name = localStorage.getItem("demo_name")
-      if (name) setUserName(name)
-
-      const storedProfile = localStorage.getItem("founder_profile_data")
-      if (storedProfile) {
-        try {
-          const parsed = JSON.parse(storedProfile)
-          if (parsed.avatarUrl) setUserAvatar(parsed.avatarUrl)
-        } catch { /* ignore */ }
-      }
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!id) return
-
-    const fetchData = async () => {
-      setIsLoading(true)
-      setError(null)
-      
-      let ideaData: any = null
-      try {
-        const res = await apiClient.get(`/ideas/${id}`)
-        ideaData = res.data
-      } catch (err) {
-        console.warn("Failed to fetch idea from API, using fallback:", err)
-      }
-
-      try {
-        const { getCommunityStats } = require("@/lib/community-api")
-        const commStats = await getCommunityStats(id)
-
-        if (ideaData) {
-          setIdea({
-            ...ideaData,
-            id: ideaData._id ?? ideaData.id,
-            commentsCount: ideaData.comments ?? 0,
-            communityTarget: commStats.communityTarget,
-            communityRaised: commStats.communityRaised,
-            investmentNeeded: ideaData.fundingGoal ?? 25000,
-            fundsGained: ideaData.fundsGained ?? 0,
-            fundsSpent: ideaData.fundsSpent ?? 0,
-          })
-        } else {
-          const { getProjectById } = require("@/lib/projects-store")
-          const storeProj = getProjectById(id)
-          if (storeProj) {
-            setIdea({
-              id: storeProj.id,
-              title: storeProj.name,
-              author: storeProj.author,
-              authorHeadline: storeProj.authorHeadline,
-              stage: storeProj.stage,
-              tags: storeProj.domains,
-              description: storeProj.description,
-              lookingFor: [],
-              likes: storeProj.likes,
-              commentsCount: storeProj.commentsCount,
-              communityTarget: commStats.communityTarget,
-              communityRaised: commStats.communityRaised,
-              investmentNeeded: storeProj.investmentNeeded,
-              fundsGained: storeProj.fundsGained,
-              fundsSpent: storeProj.fundsSpent,
-              attachments: storeProj.attachments,
-            })
-          } else {
-            setError("Could not load the idea specifications.")
-            setIsLoading(false)
-            return
-          }
-        }
-
-        // Fetch comments
-        try {
-          const commentsRes = await apiClient.get<Comment[]>(`/ideas/${id}/comments`)
-          setComments(commentsRes.data)
-        } catch (err) {
-          console.warn("Failed to fetch comments from API, falling back to local storage:", err)
-          const commentsKey = `comments_${id}`
-          const storedComments = localStorage.getItem(commentsKey)
-          setComments(storedComments ? JSON.parse(storedComments) : [])
-        }
-      } catch (err) {
-        setError("Could not load the idea specifications.")
-        console.error(err)
-      } finally {
-        setIsLoading(false)
-      }
-    }
-
-    fetchData()
-  }, [id])
-
-  const saveIdeaState = (updatedIdea: Idea) => {
-    setIdea(updatedIdea)
-
-    // Save back to lists
-    const yourStored = localStorage.getItem("founder_your_ideas")
-    const discStored = localStorage.getItem("founder_discover_ideas")
-
-    if (yourStored) {
-      const list = JSON.parse(yourStored) as Idea[]
-      const idx = list.findIndex(x => x.id === updatedIdea.id)
-      if (idx !== -1) {
-        list[idx] = updatedIdea
-        localStorage.setItem("founder_your_ideas", JSON.stringify(list))
-      }
-    }
-    if (discStored) {
-      const list = JSON.parse(discStored) as Idea[]
-      const idx = list.findIndex(x => x.id === updatedIdea.id)
-      if (idx !== -1) {
-        list[idx] = updatedIdea
-        localStorage.setItem("founder_discover_ideas", JSON.stringify(list))
-      }
-    }
-  }
-
-  const handlePledgeSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!idea) return
-
-    const amount = parseInt(pledgeInput)
-    if (isNaN(amount) || amount <= 0) {
-      setCustomPledgeError("Please enter a valid positive amount.")
+      ideaData = (await apiClient.get(`/ideas/${id}`)).data
+    } catch (err) {
+      setError(apiError(err, "Couldn't load this idea."))
+      setIsLoading(false)
       return
     }
 
+    setIdea({
+      ...ideaData,
+      id: ideaData._id ?? ideaData.id,
+      milestones: (ideaData.milestones ?? []).map(toMilestone),
+      commentsCount: ideaData.comments ?? 0,
+    })
+
     try {
-      const { submitCommunityPledge } = require("@/lib/community-api")
-      const result = await submitCommunityPledge(idea.id, amount, userName, "Pledged support via details feed.")
-      
-      if (result.success) {
-        const updatedIdea: Idea = {
-          ...idea,
-          communityRaised: result.communityRaised
-        }
-        saveIdeaState(updatedIdea)
-        
-        toast({
-          title: "Pledge Recorded",
-          description: `Thank you! You have pledged ₹${amount.toLocaleString()} to support "${idea.title}".`,
-        })
-        setIsPledgeModalOpen(false)
-        setPledgeInput("")
-        
-        window.dispatchEvent(new CustomEvent("global-projects-updated"))
-      } else {
-        throw new Error("Pledge submission rejected")
-      }
-    } catch (err) {
-      console.error(err)
-      toast({
-        title: "Error Pledging",
-        description: "Could not find backing data for this project in local store.",
-        variant: "destructive"
-      })
+      const commentsRes = await apiClient.get<{ success: boolean; comments: Comment[] }>(`/ideas/${id}/comments`)
+      setComments(commentsRes.data?.comments ?? [])
+    } catch {
+      setComments([])
+      toast({ title: "Couldn't load comments", description: "Try reloading the page.", variant: "destructive" })
     }
-  }
+    setIsLoading(false)
+  }, [id])
 
-  const handleVote = (dir: "up" | "down") => {
-    if (!idea) return
-    const voteKey = `vote_idea_${id}`
-    const prevVote = localStorage.getItem(voteKey)
+  useEffect(() => {
+    fetchData()
+  }, [fetchData])
 
-    let likesDelta = 0
-    let downDelta = 0
+  // Server data lives on the server; this only updates what's on screen.
+  const saveIdeaState = (updatedIdea: Idea) => setIdea(updatedIdea)
 
-    if (dir === "up") {
-      if (prevVote === "up") {
-        likesDelta = -1
-        localStorage.removeItem(voteKey)
-      } else if (prevVote === "down") {
-        likesDelta = 1
-        downDelta = -1
-        localStorage.setItem(voteKey, "up")
-      } else {
-        likesDelta = 1
-        localStorage.setItem(voteKey, "up")
-      }
-    } else {
-      const currentDown = idea.downvotes || 0
-      if (prevVote === "down") {
-        downDelta = -1
-        localStorage.removeItem(voteKey)
-      } else if (prevVote === "up") {
-        downDelta = 1
-        likesDelta = -1
-        localStorage.setItem(voteKey, "down")
-      } else {
-        downDelta = 1
-        localStorage.setItem(voteKey, "down")
-      }
-    }
-
-    const updated: Idea = {
-      ...idea,
-      likes: Math.max(0, idea.likes + likesDelta),
-      downvotes: Math.max(0, (idea.downvotes || 0) + downDelta)
-    }
-    saveIdeaState(updated)
-  }
 
   const handleAddComment = async () => {
     if (!idea || !commentInput.trim()) return
@@ -326,600 +151,205 @@ export default function IdeaDetailsPage() {
     try {
       const res = await apiClient.post<{ success: boolean; comment: Comment }>(`/ideas/${id}/comments`, { text: commentText })
       if (res.data?.success && res.data.comment) {
-        const serverComment = res.data.comment
-        const updatedComments = [...comments, serverComment]
+        const updatedComments = [...comments, res.data.comment]
         setComments(updatedComments)
-        localStorage.setItem(`comments_${id}`, JSON.stringify(updatedComments))
-
-        const updatedIdea: Idea = {
-          ...idea,
-          commentsCount: updatedComments.length
-        }
-        saveIdeaState(updatedIdea)
+        saveIdeaState({ ...idea, commentsCount: updatedComments.length })
       }
     } catch (err) {
-      console.error("handleAddComment failed, using offline fallback", err)
-      const newComment: Comment = {
-        id: `c-${Date.now()}`,
-        author: userName || "Anonymous",
-        authorAvatar: userAvatar,
-        text: commentText,
-        timestamp: "Just now"
-      }
-
-      const updatedComments = [...comments, newComment]
-      setComments(updatedComments)
-      localStorage.setItem(`comments_${id}`, JSON.stringify(updatedComments))
-
-      const updatedIdea: Idea = {
-        ...idea,
-        commentsCount: updatedComments.length
-      }
-      saveIdeaState(updatedIdea)
+      // No fake local comment: keep the text so the user can retry, and say what went wrong.
+      setCommentInput(commentText)
+      toast({ title: "Comment not posted", description: apiError(err, "Check your connection and try again."), variant: "destructive" })
     }
-  }
-
-  const handleFlagIdea = () => {
-    if (!idea) return
-    const updated: Idea = {
-      ...idea,
-      flagged: true,
-      flagReason: flagReasonText || "Reported for community guidelines review"
-    }
-    saveIdeaState(updated)
-    setIsFlagModalOpen(false)
-    setFlagReasonText("")
   }
 
   if (isLoading) {
-    return (
-      <div className="flex justify-center items-center h-96">
-        <Loader2 className="w-8 h-8 animate-spin text-foreground/60" />
-      </div>
-    )
+    return <Page><SkeletonRows /></Page>
   }
 
   if (error || !idea) {
     return (
-      <div className="flex flex-col items-center justify-center h-96 text-center">
-        <AlertTriangle className="w-12 h-12 text-red-400 mb-4" />
-        <h2 className="text-xl font-semibold mb-2">An Error Occurred</h2>
-        <p className="text-foreground/70 mb-4">{error || "Idea not found."}</p>
-        <Button onClick={() => router.back()} variant="outline" className="border-border/20">
-          <ArrowLeft className="mr-2 h-4 w-4" /> Go Back
-        </Button>
-      </div>
+      <Page>
+        <PageTitle title="Couldn't open this idea">{error || "It may have been deleted, or it's still a draft."}</PageTitle>
+        <div className="mt-8 flex gap-5">
+          <button type="button" onClick={() => router.back()} className={quietLinkClass}>Go back</button>
+          {error && <button type="button" onClick={fetchData} className={quietLinkClass}>Retry</button>}
+        </div>
+      </Page>
     )
   }
 
-  const stageInfo = {
-    launched: { text: "text-brand-accent", bg: "bg-brand-accent/10", border: "border-brand-accent/20" },
-    mvp: { text: "text-[#8293A4]", bg: "bg-[#8293A4]/10", border: "border-[#8293A4]/20" },
-    prototype: { text: "text-[#C88E72]", bg: "bg-[#C88E72]/10", border: "border-[#C88E72]/20" },
-    concept: { text: "text-foreground/60", bg: "bg-foreground/5", border: "border-border/10" }
-  }[idea.stage] ?? { text: "text-foreground/60", bg: "bg-foreground/5", border: "border-border/10" }
-
-  const netScore = idea.likes - (idea.downvotes || 0)
+  const isOwner = Boolean(user?.id && String(idea.founder_id) === String(user.id))
 
   return (
-    <div className="w-full pt-6 pb-24 px-6 xl:px-10">
-      <div className="max-w-5xl mx-auto space-y-8">
-        
-        {/* Back and Share Buttons */}
-        <div className="flex items-center justify-between">
-          <Button onClick={() => router.back()} variant="ghost" className="text-foreground/55 hover:text-foreground hover:bg-foreground/[0.03] rounded-full px-4 h-8 text-xs font-semibold cursor-pointer">
-            <ArrowLeft className="mr-2 h-3.5 w-3.5" /> Back to workspace
-          </Button>
-          <Button
-            onClick={handleShareClick}
-            variant="outline"
-            className="text-foreground/70 hover:text-foreground border-border/40 hover:bg-foreground/[0.03] rounded-full px-4.5 h-8 text-xs font-semibold cursor-pointer flex items-center gap-1.5"
-          >
-            <Share2 className="h-3.5 w-3.5" /> Share Idea
-          </Button>
-        </div>
+    <Page>
+      <Link href="/founder/ideas" className={quietLinkClass}>Back to ideas</Link>
 
-        {/* Idea Content */}
-        <div className={cn(
-          "relative overflow-hidden rounded-xl border border-border/[0.03] bg-background/10 shadow-lg",
-          idea.flagged && "border-rose-500/20 bg-rose-500/[0.01]"
-        )}>
-          {/* Subtle backdrop glow */}
-          <div className="absolute -top-32 -right-32 w-64 h-64 rounded-full bg-brand-accent/2 blur-3xl pointer-events-none" />
-          
-          <div className="p-8 sm:p-10">
-            <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
-              <div className="space-y-1">
-                <h1 className="text-3xl sm:text-4xl font-serif font-light tracking-tight text-foreground/95">
-                  {idea.title}
-                </h1>
-                {idea.flagged && (
-                  <Badge className="bg-rose-500/10 text-rose-400 border border-rose-500/20 text-[11px] font-mono px-2 py-0.5 mt-1">
-                    ⚠️ FLAGGED: REVIEW PENDING
-                  </Badge>
-                )}
-              </div>
-              <Badge
-                className={cn(
-                  "text-[11px] font-semibold tracking-wider uppercase px-3 py-0.5 rounded-full border",
-                  stageInfo.text, stageInfo.bg, stageInfo.border
-                )}
-              >
-                {idea.stage.toUpperCase()}
-              </Badge>
-            </div>
+      {/* The cover, then: the idea, updates, milestones and comments on the left; money, people and files on the right (xl). */}
+      <IdeaCover id={idea.id} sectors={idea.tags} className="mt-6 aspect-[21/9] w-full sm:aspect-[32/9]" rounded="rounded-3xl" />
 
-            <div className="flex flex-wrap gap-1.5 mb-8">
-              {idea.tags.map((tag) => (
-                <Badge
-                  key={tag}
-                  className="bg-foreground/[0.01] text-foreground/40 border-border/[0.03] text-[9.5px] font-mono rounded px-2 py-0.5"
-                >
-                  #{tag}
-                </Badge>
-              ))}
-            </div>
+      {isOwner && <HiddenNotice state={idea.moderation?.state} what="this idea" className="mt-6" />}
 
-            <p className="text-foreground/70 whitespace-pre-line text-sm sm:text-[14.5px] leading-relaxed font-sans font-light max-w-3xl">
-              {idea.description}
-            </p>
-          </div>
-
-          {/* Looking For block */}
-          {idea.lookingFor && idea.lookingFor.length > 0 && (
-            <div className="border-t border-border/[0.03] bg-foreground/[0.002] p-8">
-              <h3 className="text-[11px] font-mono uppercase tracking-[0.2em] text-foreground/35 mb-4">Looking For</h3>
-              <div className="flex flex-wrap gap-2">
-                {idea.lookingFor.map((item) => (
-                  <Badge key={item} className="text-[11px] font-medium border-border/10 text-foreground bg-foreground/[0.01] rounded px-3 py-1">
-                    {item}
-                  </Badge>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* Pitch Materials Section */}
-        {idea.attachments && idea.attachments.length > 0 && (() => {
-          const typeConfig = {
-            presentation: {
-              Icon: Presentation,
-              label: "Presentation Deck",
-              color: "text-blue-400",
-              border: "border-blue-500/20",
-              bg: "bg-blue-500/5",
-              hoverBg: "hover:bg-blue-500/10",
-              dot: "bg-blue-400",
-              badgeBg: "bg-blue-500/10 text-blue-400 border-blue-500/20",
-            },
-            video: {
-              Icon: Film,
-              label: "Pitch Video",
-              color: "text-purple-400",
-              border: "border-purple-500/20",
-              bg: "bg-purple-500/5",
-              hoverBg: "hover:bg-purple-500/10",
-              dot: "bg-purple-400",
-              badgeBg: "bg-purple-500/10 text-purple-400 border-purple-500/20",
-            },
-            audio: {
-              Icon: Volume2,
-              label: "Audio Pitch",
-              color: "text-amber-400",
-              border: "border-amber-500/20",
-              bg: "bg-amber-500/5",
-              hoverBg: "hover:bg-amber-500/10",
-              dot: "bg-amber-400",
-              badgeBg: "bg-amber-500/10 text-amber-400 border-amber-500/20",
-            },
-            document: {
-              Icon: FileText,
-              label: "Document",
-              color: "text-rose-400",
-              border: "border-rose-500/20",
-              bg: "bg-rose-500/5",
-              hoverBg: "hover:bg-rose-500/10",
-              dot: "bg-rose-400",
-              badgeBg: "bg-rose-500/10 text-rose-400 border-rose-500/20",
-            },
-          }
-          return (
-            <div className="rounded-xl border border-border/[0.03] bg-background/10 shadow-md hover:border-border/10 transition-all duration-300">
-              <div className="p-6 pb-4 flex items-center justify-between border-b border-border/[0.03]">
-                <div className="flex items-center gap-2.5">
-                  <Paperclip className="h-4 w-4 text-emerald-400" />
-                  <h3 className="text-[11px] font-mono uppercase tracking-[0.2em] text-foreground/50">
-                    Pitch Materials
-                  </h3>
-                  <span className="text-[10px] font-mono font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full">
-                    {idea.attachments.length} {idea.attachments.length === 1 ? "file" : "files"}
-                  </span>
-                </div>
-              </div>
-              <div className="p-6">
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {idea.attachments.map((file, idx) => {
-                    const cfg = typeConfig[file.type] ?? typeConfig.document
-                    const { Icon } = cfg
-                    return (
-                      <div
-                        key={idx}
-                        className={cn(
-                          "group relative flex flex-col gap-3 rounded-xl border p-4 transition-all duration-200 cursor-default",
-                          cfg.border, cfg.bg, cfg.hoverBg
-                        )}
-                      >
-                        {/* Header row */}
-                        <div className="flex items-start justify-between gap-2">
-                          <div className={cn(
-                            "flex items-center justify-center h-9 w-9 rounded-lg border shrink-0",
-                            cfg.border, cfg.bg
-                          )}>
-                            <Icon className={cn("h-4 w-4", cfg.color)} />
-                          </div>
-                          <span className={cn(
-                            "text-[9px] font-mono font-bold uppercase tracking-widest border rounded-full px-2 py-0.5 mt-0.5",
-                            cfg.badgeBg
-                          )}>
-                            {cfg.label}
-                          </span>
-                        </div>
-
-                        {/* File name */}
-                        <div className="min-w-0">
-                          <p className={cn("text-[12px] font-semibold font-mono truncate", cfg.color)}>
-                            {file.name}
-                          </p>
-                          <p className="text-[10px] text-foreground/35 font-mono mt-0.5">
-                            {file.size}
-                          </p>
-                        </div>
-
-                        {/* Download / Preview button */}
-                        {file.url ? (
-                          <a
-                            href={`${process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:5000'}${file.url}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            download={file.name}
-                            className={cn(
-                              "flex items-center justify-center gap-1.5 w-full h-8 rounded-lg border text-[10px] font-semibold font-mono uppercase tracking-wider transition-all duration-200 cursor-pointer opacity-0 group-hover:opacity-100 no-underline",
-                              cfg.color, cfg.border, "hover:bg-foreground/5"
-                            )}
-                          >
-                            <Download className="h-3 w-3" />
-                            Download
-                          </a>
-                        ) : (
-                          <div
-                            className={cn(
-                              "flex items-center justify-center gap-1.5 w-full h-8 rounded-lg border text-[10px] font-semibold font-mono uppercase tracking-wider opacity-0 group-hover:opacity-100 cursor-not-allowed",
-                              cfg.color, cfg.border, "opacity-40"
-                            )}
-                            title="File not yet uploaded to server"
-                          >
-                            <Download className="h-3 w-3" />
-                            Unavailable
-                          </div>
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
-              </div>
-            </div>
-          )
-        })()}
-
-        {/* Funding Pools: Community (Pledges) & Investor (Escrow) */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Community Card */}
-          <Card className="relative overflow-hidden bg-background/10 border-border/[0.03] rounded-xl shadow-md p-6 space-y-4">
-            <div className="absolute -top-32 -right-32 w-64 h-64 rounded-full bg-brand-accent/2 blur-3xl pointer-events-none" />
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-              <div className="space-y-1">
-                <h3 className="text-[11px] font-mono uppercase tracking-[0.2em] text-foreground/35">Community Funding Pool</h3>
-                <div className="text-2xl font-serif font-light text-foreground">
-                  ₹{(idea.communityRaised || 0).toLocaleString()} <span className="text-xs text-foreground/40">raised of ₹{(idea.communityTarget || 25000).toLocaleString()}</span>
-                </div>
-              </div>
-              {idea.author !== "You" ? (
-                <Button
-                  onClick={() => setIsPledgeModalOpen(true)}
-                  className="h-9 rounded-full bg-foreground text-background hover:bg-brand-accent hover:text-background text-xs font-semibold px-5 transition-all duration-300 cursor-pointer"
-                >
-                  Back this Project
-                </Button>
-              ) : (
-                <Badge className="bg-brand-accent/10 text-brand-accent border border-brand-accent/20 text-[11px] font-mono px-3 py-1 rounded-full">
-                  Your Campaign Active
-                </Badge>
-              )}
-            </div>
-            
-            <div className="space-y-2">
-              <div className="h-2 w-full rounded-full bg-foreground/5 overflow-hidden">
-                <div
-                  className="h-full bg-brand-accent transition-all duration-500"
-                  style={{ width: `${Math.min(100, Math.round(((idea.communityRaised || 0) / (idea.communityTarget || 25000)) * 100))}%` }}
-                />
-              </div>
-              <div className="flex justify-between text-[10px] font-mono text-foreground/30">
-                <span>{Math.round(((idea.communityRaised || 0) / (idea.communityTarget || 25000)) * 100)}% Funded</span>
-                <span>Active Community Escrow</span>
-              </div>
-            </div>
-          </Card>
-
-          {/* Investor Card */}
-          <Card className="relative overflow-hidden bg-background/10 border-border/[0.03] rounded-xl shadow-md p-6 space-y-4">
-            <div className="absolute -top-32 -right-32 w-64 h-64 rounded-full bg-amber-500/2 blur-3xl pointer-events-none" />
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-              <div className="space-y-1">
-                <h3 className="text-[11px] font-mono uppercase tracking-[0.2em] text-foreground/35">Investor Escrow Pool</h3>
-                <div className="text-2xl font-serif font-light text-foreground">
-                  ${(idea.fundsGained || 0).toLocaleString()} <span className="text-xs text-foreground/40">gained of ${(idea.investmentNeeded || 25000).toLocaleString()}</span>
-                </div>
-              </div>
-              <Badge variant="outline" className="text-[11px] font-mono border-amber-500/30 text-amber-400 bg-amber-500/5 px-3 py-1 rounded-full">
-                Institutional Gated
-              </Badge>
-            </div>
-            
-            <div className="space-y-2">
-              <div className="h-2 w-full rounded-full bg-foreground/5 overflow-hidden">
-                <div
-                  className="h-full transition-all duration-500"
-                  style={{ width: `${Math.min(100, Math.round(((idea.fundsGained || 0) / (idea.investmentNeeded || 25000)) * 100))}%`, background: "var(--brand-accent)" }}
-                />
-              </div>
-              <div className="flex justify-between text-[10px] font-mono text-foreground/30">
-                <span>{Math.round(((idea.fundsGained || 0) / (idea.investmentNeeded || 25000)) * 100)}% Gained</span>
-                <span>Requires Milestone Releases</span>
-              </div>
-            </div>
-          </Card>
-        </div>
-
-        {/* Author & Voting Actions */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          <Card className="md:col-span-1 bg-background/10 border-border/[0.03] rounded-xl shadow-md hover:border-border/10 transition-all duration-300">
-            <CardContent className="p-6">
-              <h3 className="text-[11px] font-mono uppercase tracking-[0.2em] text-foreground/35 mb-4">Author</h3>
-              <div className="flex items-center gap-3">
-                <Avatar className="h-10 w-10 border border-border/10 shadow">
-                  <AvatarImage src={idea.authorAvatar} className="object-cover" />
-                  <AvatarFallback className="bg-foreground/5 text-foreground/80 font-bold">{idea.author.charAt(0)}</AvatarFallback>
-                </Avatar>
-                <div className="min-w-0">
-                  <p className="font-semibold text-xs text-foreground/90 truncate">{idea.author}</p>
-                  <p className="text-[11px] text-foreground/40 truncate mt-0.5">{idea.authorHeadline || "Cohort Founder"}</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="md:col-span-2 bg-background/10 border-border/[0.03] rounded-xl shadow-md hover:border-border/10 transition-all duration-300">
-            <CardContent className="p-6 flex items-center justify-between gap-4 h-full">
-              
-              {/* Upvote / Downvote buttons (Replaces single heart toggle) */}
-              <div className="flex items-center gap-3">
-                <div className="flex items-center bg-foreground/[0.02] border border-border/10 rounded-lg p-1">
-                  <button
-                    onClick={() => handleVote("up")}
-                    className="hover:text-emerald-400 p-1.5 transition-colors cursor-pointer"
-                    aria-label="Upvote"
-                  >
-                    <ArrowBigUp className="h-5 w-5" />
-                  </button>
-                  <span className="text-xs font-bold px-2 text-foreground/80 min-w-[20px] text-center">
-                    {netScore}
-                  </span>
-                  <button
-                    onClick={() => handleVote("down")}
-                    className="hover:text-rose-400 p-1.5 transition-colors cursor-pointer"
-                    aria-label="Downvote"
-                  >
-                    <ArrowBigDown className="h-5 w-5" />
-                  </button>
-                </div>
-
-                <button
-                  onClick={() => setIsFlagModalOpen(true)}
-                  disabled={idea.flagged}
-                  className={cn(
-                    "h-9 px-3 rounded-lg border border-border/10 text-foreground/40 hover:text-rose-400 hover:bg-rose-500/10 flex items-center gap-1.5 text-xs font-mono transition-all cursor-pointer",
-                    idea.flagged && "opacity-50 pointer-events-none"
-                  )}
-                  title="Report or flag this spec"
-                >
-                  <Flag className="h-3.5 w-3.5" />
-                  <span>{idea.flagged ? "Flagged" : "Flag"}</span>
-                </button>
-              </div>
-
-              <Button
-                onClick={handleCollaborate}
-                disabled={isCollaborating}
-                className="h-9 rounded-full bg-foreground text-background hover:bg-brand-accent hover:text-background text-xs font-semibold px-5 transition-all duration-300 cursor-pointer flex items-center gap-1.5"
-              >
-                {isCollaborating && <Loader2 className="h-3 w-3 animate-spin" />}
-                {isCollaborating ? "Sending..." : "Collaborate"}
-              </Button>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Comments Section (Includes comment insertion form) */}
-        <div className="rounded-xl border border-border/[0.03] bg-background/10 p-6 shadow-md hover:border-border/10 transition-all duration-300 space-y-6">
-          <h2 className="text-base font-serif font-light text-foreground">
-            Comments ({comments.length})
-          </h2>
-
-          {/* Comment composer */}
-          <div className="flex gap-3">
-            <Avatar className="h-8 w-8 border border-border/10 shrink-0">
-              <AvatarImage src={userAvatar} className="object-cover" />
-              <AvatarFallback className="bg-accent text-xs font-bold">{userName.charAt(0)}</AvatarFallback>
-            </Avatar>
-            <div className="flex-1 flex gap-2">
-              <Input
-                placeholder="Suggest validation fixes or ask detailed specification questions..."
-                value={commentInput}
-                onChange={(e) => setCommentInput(e.target.value)}
-                className="h-9 bg-accent/20 border-border text-xs rounded-xl flex-1 focus-visible:ring-brand-accent"
+      <Split className="mt-10">
+        <Main>
+          <div>
+            <PageTitle title={idea.title} />
+            <div className="mt-5">
+              <IdeaFacts
+                founder={isOwner ? "You" : idea.founder?.name || idea.author}
+                founderAvatar={idea.founder?.avatarUrl}
+                stage={idea.stage}
+                raising={idea.raising}
+                location={idea.founder?.location}
+                sectors={idea.tags}
+                postedAt={idea.createdAt}
+                views={idea.views ?? 0}
+                likes={idea.likes}
+                comments={idea.commentsCount}
               />
-              <Button
-                onClick={handleAddComment}
-                disabled={!commentInput.trim()}
-                className="h-9 w-9 rounded-xl bg-primary text-primary-foreground hover:opacity-95 p-0 flex items-center justify-center shrink-0 cursor-pointer"
-              >
-                <Send className="h-4 w-4" />
-              </Button>
             </div>
-          </div>
-
-          {/* Comments list */}
-          <div className="space-y-5">
-            {comments.length > 0 ? (
-              comments.map((comment) => (
-                <div key={comment.id} className="flex items-start gap-4">
-                  <Avatar className="h-8 w-8 border border-border/10 shrink-0">
-                    <AvatarImage src={comment.authorAvatar} className="object-cover" />
-                    <AvatarFallback className="bg-foreground/5 text-foreground/70 text-xs font-semibold">{(comment.author || "Anonymous").charAt(0)}</AvatarFallback>
-                  </Avatar>
-                  <div className="w-full bg-foreground/[0.005] p-3 rounded-xl border border-border/[0.02]">
-                    <div className="flex items-center justify-between gap-2 mb-1">
-                      <p className="font-semibold text-xs text-foreground/80">{comment.author || "Anonymous"}</p>
-                      <p className="text-[11px] font-mono text-foreground/30 uppercase tracking-wide">{comment.timestamp}</p>
-                    </div>
-                    <p className="text-xs text-foreground/60 leading-relaxed font-sans font-light">
-                      {comment.text}
-                    </p>
-                  </div>
-                </div>
-              ))
-            ) : (
-              <p className="text-xs text-foreground/30 text-center py-6 font-mono uppercase tracking-widest">No comments yet</p>
+            <p className="mt-8 max-w-[62ch] whitespace-pre-line text-lg leading-relaxed text-foreground/90">{idea.description}</p>
+            {idea.lookingFor && idea.lookingFor.length > 0 && (
+              <p className="mt-6 text-[15px] text-muted-foreground">
+                Looking for <span className="text-foreground">{idea.lookingFor.map((r) => labelFor("roles", r)).join(", ")}</span>
+              </p>
             )}
           </div>
-        </div>
+        </Main>
 
-      </div>
-
-      {/* Flag dialog */}
-      {isFlagModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-popover border border-border p-6 rounded-xl max-w-sm w-full space-y-4 shadow-2xl">
-            <div className="flex items-center gap-2 text-rose-500">
-              <AlertTriangle className="h-5 w-5" />
-              <h3 className="font-serif text-base font-semibold text-foreground">Complain/Flag Idea</h3>
+        <Aside>
+          {isOwner ? (
+            <MoneyPanel
+              className="mt-10 xl:mt-0"
+              rows={[
+                { label: "Committed by investors", value: usd(idea.commitments?.total ?? 0), tone: "gold" },
+                { label: "Released", value: usd(idea.commitments?.released ?? 0), tone: (idea.commitments?.released ?? 0) > 0 ? "done" : "plain" },
+                { label: (idea.commitments?.count ?? 0) === 1 ? "Investor" : "Investors", value: String(idea.commitments?.count ?? 0) },
+                { label: "Views", value: String(idea.views ?? 0) },
+              ]}
+              note="No money moves on Something yet: commitments and releases are records. Mark milestones done so investors can release against them."
+            >
+              <button type="button" onClick={handleShareClick} className={quietLinkClass}>Copy link</button>
+            </MoneyPanel>
+          ) : (
+            <div className="mt-10 flex flex-wrap items-center gap-5 xl:mt-0">
+              <button type="button" onClick={() => setJoinOpen(true)} className={pillClass}>Ask to join</button>
+              <SupportButton
+                ideaId={idea.id}
+                supported={idea.supportedByMe}
+                count={idea.likes}
+                onChange={(next) => setIdea((cur) => (cur ? { ...cur, likes: next.count, supportedByMe: next.supported } : cur))}
+              />
+              <button type="button" onClick={handleShareClick} className={quietLinkClass}>Copy link</button>
+              <ReportButton type="idea" id={idea.id} />
             </div>
-            <p className="text-xs text-muted-foreground leading-relaxed">
-              Help moderate cohort ideas. Surfacing plagiarism or malicious code specifications protects early validation.
-            </p>
-            <Input
-              placeholder="Reason for flag..."
-              value={flagReasonText}
-              onChange={(e) => setFlagReasonText(e.target.value)}
-              className="bg-accent/20 border-border text-xs"
-            />
-            <div className="flex justify-end gap-2 pt-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => { setIsFlagModalOpen(false); setFlagReasonText("") }}
-                className="h-8 text-xs rounded-lg border-border/60"
-              >
-                Cancel
-              </Button>
-              <Button
-                size="sm"
-                onClick={handleFlagIdea}
-                className="h-8 text-xs rounded-lg bg-rose-600 text-white hover:bg-rose-700"
-              >
-                Submit Flag
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
+          )}
 
-      {/* Pledge dialog */}
-      {isPledgeModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-popover border border-border p-6 rounded-xl max-w-sm w-full space-y-4 shadow-2xl">
-            <div className="flex items-center gap-2 text-brand-accent">
-              <Coins className="h-5 w-5" />
-              <h3 className="font-serif text-base font-semibold text-foreground">Pledge Support</h3>
-            </div>
-            <p className="text-xs text-muted-foreground leading-relaxed">
-              Support this project with any amount. Every rupee counts. All pledges are held in milestone escrow pools.
-            </p>
-            
-            <form onSubmit={handlePledgeSubmit} className="space-y-4">
-              <div className="space-y-2">
-                <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-foreground/40 font-mono text-xs">₹</span>
-                  <Input
-                    type="number"
-                    min="1"
-                    placeholder="Enter pledge amount..."
-                    value={pledgeInput}
-                    onChange={(e) => {
-                      setPledgeInput(e.target.value)
-                      setCustomPledgeError(null)
-                    }}
-                    className="pl-7 bg-accent/20 border-border text-xs focus-visible:ring-brand-accent"
-                    required
-                  />
-                </div>
-                {customPledgeError && (
-                  <p className="text-[10px] text-rose-500 font-mono">{customPledgeError}</p>
-                )}
-              </div>
+          {isOwner && !idea.isDraft && <IdeaReach ideaId={idea.id} />}
 
-              {/* Quick Preset Buttons */}
-              <div className="grid grid-cols-4 gap-2">
-                {[10, 50, 100, 500].map((preset) => (
-                  <button
-                    type="button"
-                    key={preset}
-                    onClick={() => {
-                      setPledgeInput(preset.toString())
-                      setCustomPledgeError(null)
-                    }}
-                    className="h-8 rounded bg-foreground/5 border border-border/10 text-[11px] font-mono text-foreground/75 hover:bg-brand-accent/20 hover:text-brand-accent hover:border-brand-accent/20 transition-all cursor-pointer"
-                  >
-                    +₹{preset}
-                  </button>
+          {!isOwner && idea.founder && (
+            <Section title="Founder">
+              <FounderCard founder={idea.founder} />
+            </Section>
+          )}
+
+          {(idea.team ?? []).some((m) => !m.isFounder) && (
+            <Section title="Team">
+              <ul className="divide-y divide-border">
+                {idea.team!.map((m, i) => (
+                  <li key={`${m.name}-${i}`} className="flex items-baseline justify-between gap-6 py-3">
+                    <span className="text-[15px]">{m.isFounder && isOwner ? "You" : m.name}</span>
+                    <span className="truncate text-xs text-muted-foreground">{m.isFounder ? "Founder" : m.role}</span>
+                  </li>
                 ))}
-              </div>
+              </ul>
+            </Section>
+          )}
 
-              <div className="flex justify-end gap-2 pt-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => { setIsPledgeModalOpen(false); setPledgeInput(""); setCustomPledgeError(null) }}
-                  className="h-8 text-xs rounded-lg border-border/60"
-                >
-                  Cancel
-                </Button>
-                <Button
-                  type="submit"
-                  size="sm"
-                  className="h-8 text-xs rounded-lg bg-brand-accent text-background hover:bg-brand-accent hover:text-background"
-                >
-                  Submit Pledge
-                </Button>
-              </div>
+          {idea.attachments && idea.attachments.length > 0 && (
+            <Section title="Files">
+              <ul className="divide-y divide-border border-y border-border">
+                {idea.attachments.map((f, i) => (
+                  <li key={`${f.name}-${i}`} className="flex items-baseline justify-between gap-6 py-4">
+                    <span className="min-w-0">
+                      <span className="block truncate text-[15px]">{f.name}</span>
+                      <span className="block text-xs text-muted-foreground">{[fileKind(f.type), f.size].filter(Boolean).join(", ")}</span>
+                    </span>
+                    {f.url ? (
+                      <a href={assetUrl(f.url)} target="_blank" rel="noopener noreferrer" className={quietLinkClass}>Open</a>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">Not uploaded</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </Section>
+          )}
+
+        </Aside>
+
+        <Main>
+          <IdeaUpdates ideaId={idea.id} isOwner={isOwner} />
+
+          <IdeaMilestones
+            ideaId={idea.id}
+            milestones={idea.milestones ?? []}
+            isOwner={isOwner}
+            onChange={(next) => setIdea((cur) => (cur ? { ...cur, milestones: next } : cur))}
+          />
+
+          <Section title={`Comments${comments.length ? ` (${comments.length})` : ""}`}>
+            <form onSubmit={(e) => { e.preventDefault(); handleAddComment() }} className="flex flex-col gap-3 sm:flex-row">
+              <input
+                aria-label="Write a comment"
+                placeholder="Ask a question or share a thought"
+                value={commentInput}
+                onChange={(e) => setCommentInput(e.target.value)}
+                className="h-11 w-full shrink-0 sm:w-auto sm:flex-1 rounded-full border border-input bg-transparent px-5 text-base text-foreground placeholder:text-muted-foreground focus:border-muted-foreground focus:outline-none"
+              />
+              <button type="submit" disabled={!commentInput.trim()} className={pillClass}>Post</button>
             </form>
-          </div>
-        </div>
-      )}
+            {comments.length === 0 ? (
+              <p className="mt-6 text-[15px] text-muted-foreground">No comments yet.</p>
+            ) : (
+              <ul className="mt-6 divide-y divide-border">
+                {comments.map((c) => (
+                  <li key={c.id} className="py-5">
+                    <div className="flex items-baseline justify-between gap-6">
+                      <span className="text-[15px] text-foreground">{c.author || "Someone"}</span>
+                      <span className="flex items-baseline gap-4 text-xs text-muted-foreground">
+                        {relativeTime(c.timestamp)}
+                        {user?.id && c.authorId && String(c.authorId) !== String(user.id) && (
+                          <ReportButton type="comment" id={c.id} className="text-xs" />
+                        )}
+                      </span>
+                    </div>
+                    <p className={`mt-1.5 max-w-[65ch] text-[15px] leading-relaxed ${c.hidden ? "text-muted-foreground" : "text-foreground/90"}`}>{c.text}</p>
+                    {c.hidden && (
+                      <p className="mt-1.5 text-[13px] text-muted-foreground">
+                        {c.hidden === "hidden"
+                          ? <>Only you can see this comment: it&apos;s hidden while we look at some reports.</>
+                          : <>Only you can see this comment: it was removed because it breaks the community rules.</>}
+                      </p>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Section>
 
-    </div>
+        </Main>
+      </Split>
+
+      {!isOwner && (
+        <StartChatDialog
+          open={joinOpen}
+          onOpenChange={setJoinOpen}
+          ideaId={idea.id}
+          ideaTitle={idea.title}
+          founderName={idea.founder?.name || idea.author}
+          role="founder"
+        />
+      )}
+    </Page>
   )
 }
