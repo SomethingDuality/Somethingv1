@@ -21,6 +21,8 @@ export type IdeaCardData = {
   createdAt?: string | null
   milestones?: { status: "open" | "done" }[]
   isDraft?: boolean
+  /** The founder's own hidden or removed idea (moderation); nobody else ever gets one. */
+  moderation?: "hidden" | "removed"
 }
 
 /** The raising band; gold when the founder is raising (money), muted when they aren't. */
@@ -85,6 +87,11 @@ export function IdeaCard({ idea, href, action, className }: { idea: IdeaCardData
       )}
       <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-muted-foreground">
         {idea.isDraft && <span className="rounded-full border border-line px-2 py-0.5 text-foreground">Draft</span>}
+        {idea.moderation && (
+          <span className="rounded-full border border-line px-2 py-0.5 text-foreground">
+            {idea.moderation === "hidden" ? "Hidden for review" : "Removed"}
+          </span>
+        )}
         {idea.author && (
           <span className="inline-flex items-center gap-1.5">
             <Avatar name={idea.author} src={idea.authorAvatar} size={18} />
