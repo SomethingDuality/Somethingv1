@@ -16,6 +16,12 @@ const feedRoutes          = require('./routes/feed.routes.js');
 const teamRoutes          = require('./routes/team.routes.js');
 const questionsRoutes     = require('./routes/questions.routes.js');
 const adminRoutes         = require('./routes/admin.routes.js');
+const reportsRoutes       = require('./routes/reports.routes.js');
+const inboxRoutes         = require('./routes/inbox.routes.js');
+const problemsRoutes      = require('./routes/problems.routes.js');
+const leaderboardsRoutes  = require('./routes/leaderboards.routes.js');
+const threadsRoutes       = require('./routes/threads.routes.js');
+const agentRoutes         = require('./routes/agent.routes.js');
 
 const app = express();
 
@@ -39,6 +45,12 @@ app.use('/feed',          feedRoutes);
 app.use('/teams',         teamRoutes);
 app.use('/questions',     questionsRoutes);
 app.use('/admin',         adminRoutes);
+app.use('/reports',       reportsRoutes);
+app.use('/inbox',         inboxRoutes);
+app.use('/problems',      problemsRoutes);
+app.use('/leaderboards',  leaderboardsRoutes);
+app.use('/threads',       threadsRoutes);
+app.use('/agent',         agentRoutes);
 
 app.get('/health', (_, res) => {
 	const mongo = mongoose.connection.readyState === 1 ? 'up' : 'down';
