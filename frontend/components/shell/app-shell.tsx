@@ -5,6 +5,7 @@ import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import { useAuth } from "@/components/auth-provider"
 import { NotificationsDropdown } from "@/components/notifications-dropdown"
+import { InboxProvider, useInbox } from "@/components/community/inbox-provider"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -14,6 +15,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
 import { Creature } from "@/components/creature/creature"
+import { useGhostMode } from "@/hooks/use-ghost-mode"
 
 export type NavItem = { label: string; href: string }
 
@@ -23,16 +25,25 @@ type Props = {
   children: React.ReactNode
 }
 
-const GHOST_KEY = "investor_ghost_mode"
-
 /**
  * The logged-in frame: a text-only sidebar (wordmark, a few words, notifications, the account),
  * and on small screens a top bar with a full-screen menu. It also switches <html> to the
  * interior theme (true black, Geist, the 13px floor) while it is mounted.
  */
-export function AppShell({ role, nav, children }: Props) {
+export function AppShell(props: Props) {
+  return (
+    <InboxProvider>
+      <Shell {...props} />
+    </InboxProvider>
+  )
+}
+
+function Shell({ role, nav, children }: Props) {
   const pathname = usePathname() ?? ""
   const [menuOpen, setMenuOpen] = useState(false)
+  const { summary } = useInbox()
+  // Chats with something new for you: unread messages, including requests you haven't opened.
+  const chatBadge = summary?.chats.unreadThreads ?? 0
   useInteriorTheme()
 
   // Close the mobile menu after navigating.
@@ -56,6 +67,9 @@ export function AppShell({ role, nav, children }: Props) {
           )}
         >
           {item.label}
+          {item.href.endsWith("/chats") && chatBadge > 0 && (
+            <span className="ml-2 text-foreground tabular-nums" aria-label={`, ${chatBadge} with something new`}>{chatBadge}</span>
+          )}
         </Link>
       ))}
     </nav>
@@ -135,26 +149,8 @@ export function Wordmark({ href }: { href: string }) {
 function AccountMenu({ role }: { role: "founder" | "investor" }) {
   const { user, logout } = useAuth()
   const router = useRouter()
-  const [ghost, setGhost] = useState(false)
-
-  // Ghost Mode is still a per-browser setting (community plan C5 moves it to the server).
-  useEffect(() => {
-    if (role !== "investor") return
-    setGhost(localStorage.getItem(GHOST_KEY) === "true")
-    const onChange = (e: Event) => {
-      const ce = e as CustomEvent<{ ghost: boolean }>
-      if (ce.detail) setGhost(ce.detail.ghost)
-    }
-    window.addEventListener("ghost-mode-change", onChange)
-    return () => window.removeEventListener("ghost-mode-change", onChange)
-  }, [role])
-
-  const toggleGhost = () => {
-    const on = !ghost
-    setGhost(on)
-    localStorage.setItem(GHOST_KEY, String(on))
-    window.dispatchEvent(new CustomEvent("ghost-mode-change", { detail: { ghost: on } }))
-  }
+  const ghostMode = useGhostMode()
+  const ghost = role === "investor" && ghostMode.on
 
   return (
     <DropdownMenu>
@@ -176,7 +172,7 @@ function AccountMenu({ role }: { role: "founder" | "investor" }) {
           </DropdownMenuItem>
         )}
         {role === "investor" && (
-          <DropdownMenuItem onClick={toggleGhost} className="px-3 py-2 text-sm cursor-pointer rounded-lg">
+          <DropdownMenuItem onClick={() => ghostMode.set(!ghostMode.on)} disabled={ghostMode.saving} className="px-3 py-2 text-sm cursor-pointer rounded-lg">
             {ghost ? "Turn Ghost Mode off" : "Turn Ghost Mode on"}
           </DropdownMenuItem>
         )}

@@ -1,7 +1,10 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
+import { useRouter } from "next/navigation"
 import apiClient from "@/lib/axios"
+import { useInbox } from "@/components/community/inbox-provider"
+import { useIsMobile } from "@/hooks/use-mobile"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { apiError, cn } from "@/lib/utils"
 import { when } from "@/lib/format"
@@ -11,19 +14,28 @@ interface Notification {
   text: string
   timestamp: string
   read: boolean
+  /** The page it opens, e.g. the idea it is about. */
+  link?: string | null
 }
+
 
 
 /**
  * The sidebar's "Notifications" row and its list. Server data only: if the request fails the
  * list says so (it used to fall back to a browser copy and look current).
- * Unread ones are counted on the row and shown in full colour; opening one marks it read.
- * "Clear all" deletes them.
+ * Unread ones are counted on the row and shown in full colour; opening one marks it read and
+ * goes to the page it is about. "Clear all" deletes them. The shell's inbox poll (every 20 s
+ * while the tab is visible) tells it when the unread count changed; only then it reloads.
  */
 export function NotificationsDropdown() {
+  const router = useRouter()
+  // Beside the sidebar on laptops; above the row in the phone menu, where there's no room beside it.
+  const isMobile = useIsMobile()
+  const [open, setOpen] = useState(false)
   const [items, setItems] = useState<Notification[]>([])
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const unreadRef = useRef(0)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -43,6 +55,21 @@ export function NotificationsDropdown() {
   }, [load])
 
   const unread = items.filter((n) => !n.read).length
+  unreadRef.current = unread
+
+  const { summary } = useInbox()
+  const serverUnread = summary?.notifications.unread
+  useEffect(() => {
+    if (serverUnread !== undefined && serverUnread !== unreadRef.current) load()
+  }, [serverUnread, load])
+
+  const openItem = (n: Notification) => {
+    if (!n.read) markRead(n.id)
+    if (n.link) {
+      setOpen(false)
+      router.push(n.link)
+    }
+  }
 
   const markRead = async (id: string) => {
     setItems((list) => list.map((n) => (n.id === id ? { ...n, read: true } : n)))
@@ -72,12 +99,18 @@ export function NotificationsDropdown() {
   }
 
   return (
-    <Popover onOpenChange={(open) => open && load()}>
+    <Popover open={open} onOpenChange={(o) => { setOpen(o); if (o) load() }}>
       <PopoverTrigger className="flex w-full items-center justify-between py-1.5 text-[15px] text-muted-foreground hover:text-foreground transition-colors cursor-pointer">
         <span>Notifications</span>
         {unread > 0 && <span className="text-foreground tabular-nums" aria-label={`${unread} unread`}>{unread}</span>}
       </PopoverTrigger>
-      <PopoverContent side="right" align="end" sideOffset={16} className="w-80 p-0 bg-popover border-border rounded-xl">
+      <PopoverContent
+        side={isMobile ? "top" : "right"}
+        align={isMobile ? "start" : "end"}
+        sideOffset={isMobile ? 8 : 16}
+        collisionPadding={16}
+        className="w-[min(20rem,calc(100vw-2rem))] p-0 bg-popover border-border rounded-xl"
+      >
         <div className="max-h-96 overflow-y-auto p-2">
           {loading && items.length === 0 ? (
             <p className="px-3 py-6 text-sm text-muted-foreground">Loading…</p>
@@ -94,8 +127,8 @@ export function NotificationsDropdown() {
                 <li key={n.id} className="border-b border-border last:border-0">
                   <button
                     type="button"
-                    onClick={() => !n.read && markRead(n.id)}
-                    className={cn("w-full px-3 py-3 text-left", n.read ? "cursor-default" : "cursor-pointer")}
+                    onClick={() => openItem(n)}
+                    className={cn("w-full rounded-lg px-3 py-3 text-left transition-colors", n.read && !n.link ? "cursor-default" : "cursor-pointer hover:bg-surface-2")}
                   >
                     <p className={cn("text-sm leading-snug", n.read ? "text-muted-foreground" : "text-foreground")}>{n.text}</p>
                     <p className="mt-1 text-xs text-muted-foreground">

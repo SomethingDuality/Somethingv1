@@ -13,6 +13,8 @@ type User = {
   hasPassword?: boolean
   authProviders?: string[]
   isAdmin?: boolean
+  /** Investors only: on unless they turned it off (C5). */
+  ghostMode?: boolean
 } | null
 
 type GoogleExtras = { role?: "founder" | "investor"; accepted_terms?: boolean }
@@ -101,9 +103,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       localStorage.removeItem("investor_profile_data")
       localStorage.removeItem("founder_milestones")
       localStorage.removeItem("investor_portfolio")
-      localStorage.setItem("demo_name",     me.name  || "")
-      localStorage.setItem("demo_email",    me.email || "")
-      localStorage.setItem("demo_role",     me.role  || "founder")
     }
     return me
   }

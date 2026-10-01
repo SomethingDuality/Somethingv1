@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
-import { useParams, useRouter } from "next/navigation"
+import { useParams } from "next/navigation"
 import apiClient, { assetUrl } from "@/lib/axios"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { apiError, cn } from "@/lib/utils"
@@ -19,6 +19,9 @@ import { toast } from "@/components/ui/use-toast"
 import { useAuth } from "@/components/auth-provider"
 import { normalizeList } from "@/lib/taxonomy"
 import { SkeletonRows } from "@/components/visual/skeleton"
+import { ReportButton } from "@/components/community/report-dialog"
+import { SupportButton } from "@/components/community/support-button"
+import { StartChatDialog } from "@/components/chat/start-chat-dialog"
 
 /** What the brief shows, all from GET /ideas/:id. */
 type Project = {
@@ -30,6 +33,7 @@ type Project = {
   launchedAt: string | null
   views: number
   likes: number
+  supportedByMe?: boolean
   comments: number
   founder: FounderCardData | null
   team: { name: string; role: string; isFounder: boolean }[]
@@ -43,7 +47,6 @@ type Project = {
 type Mine = { id: string; committed: number; released: number; releases: { amount: number; milestoneId: string | null }[] }
 
 export default function ProjectBriefPage() {
-  const router = useRouter()
   const params = useParams()
   const id = params.id as string
 
@@ -53,6 +56,8 @@ export default function ProjectBriefPage() {
   // NDA state
   const [ndaSigned, setNdaSigned] = useState(false)
   const [isSigningModalOpen, setIsSigningModalOpen] = useState(false)
+  // "Message founder" opens a chat request (community C5); Ghost Mode is applied by the server.
+  const [chatOpen, setChatOpen] = useState(false)
   const [legalName, setLegalName] = useState("")
   const [agreedToTerms, setAgreedToTerms] = useState(false)
 
@@ -92,6 +97,7 @@ export default function ProjectBriefPage() {
         launchedAt: projectData.createdAt ?? null,
         views: projectData.views ?? 0,
         likes: projectData.likes ?? 0,
+        supportedByMe: Boolean(projectData.supportedByMe),
         comments: projectData.comments ?? 0,
         founder: projectData.founder ?? (projectData.author ? { name: projectData.author } : null),
         team: projectData.team ?? [],
@@ -167,98 +173,6 @@ export default function ProjectBriefPage() {
         <Link href="/investor/search" className={cn(quietLinkClass, "mt-8 inline-block")}>Back to Discover</Link>
       </Page>
     )
-  }
-
-  const handleStartChat = (founderName: string) => {
-    const isGhost = localStorage.getItem("investor_ghost_mode") === "true"
-
-    const storedThreads = localStorage.getItem("investor_threads")
-    let threads = []
-    if (storedThreads) {
-      try {
-        threads = JSON.parse(storedThreads)
-      } catch {
-        threads = []
-      }
-    }
-    
-    const cleanId = "th-" + founderName.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "")
-    
-    // Add to investor_threads
-    const exists = threads.some((t: any) => t.id === cleanId)
-    if (!exists) {
-      const newThread = {
-        id: cleanId,
-        name: `${founderName} • ${p.name}`,
-        lastMessagePreview: isGhost ? `[stealth match] Message sent from Ghost Investor` : `New conversation regarding ${p.name}...`,
-        unreadCount: 0,
-        participants: [{ id: cleanId.replace("th-", ""), name: founderName, avatarInitials: founderName.split(" ").map((n) => n[0]).join(""), isOnline: true }],
-        lastActive: new Date().toISOString(),
-        isOnline: true,
-        isGhostMode: isGhost,
-      }
-      const updated = [newThread, ...threads]
-      localStorage.setItem("investor_threads", JSON.stringify(updated))
-    }
-
-    // Add to founder_chat_threads and messages
-    const founderStored = localStorage.getItem("founder_chat_threads")
-    let founderThreads = []
-    if (founderStored) {
-      try { founderThreads = JSON.parse(founderStored) } catch { founderThreads = [] }
-    }
-    
-    const founderExists = founderThreads.some((t: any) => t.id === cleanId)
-    if (!founderExists) {
-      const investorName = localStorage.getItem("demo_name") || ""
-      const newFounderThread = {
-        id: cleanId,
-        name: isGhost ? "Ghost Investor" : investorName,
-        preview: `New conversation regarding ${p.name}...`,
-        unread: 1,
-        category: "requests",
-        participants: [founderName, isGhost ? "Ghost Investor" : investorName],
-        lastActive: "Just now",
-        isOnline: true,
-        isGhostMode: isGhost,
-        realInvestorName: investorName,
-        realFirmName: localStorage.getItem("demo_firm") || ""
-      }
-      const updatedFounder = [newFounderThread, ...founderThreads]
-      localStorage.setItem("founder_chat_threads", JSON.stringify(updatedFounder))
-      
-      // Initialize messages
-      const founderMsgs = localStorage.getItem("founder_chat_messages")
-      let msgsDb: Record<string, any> = {}
-      if (founderMsgs) {
-        try { msgsDb = JSON.parse(founderMsgs) } catch { msgsDb = {} }
-      }
-      msgsDb[cleanId] = [
-        {
-          id: `m-init-${Date.now()}`,
-          from: "them",
-          text: `Hi ${founderName}, I'm interested in your project brief for ${p.name}.`,
-          when: "Just now",
-          timestamp: Date.now(),
-          seen: false,
-          delivered: true
-        }
-      ]
-      localStorage.setItem("founder_chat_messages", JSON.stringify(msgsDb))
-      
-      // Sync investor messages
-      localStorage.setItem(`investor_msgs_${cleanId}`, JSON.stringify([
-        {
-          id: `m-init-${Date.now()}`,
-          sender: { id: cleanId.replace("th-", ""), name: founderName },
-          text: `Hi ${founderName}, I'm interested in your project brief for ${p.name}.`,
-          createdAt: new Date().toISOString(),
-          deliveryStatus: "delivered"
-        }
-      ]))
-    }
-    
-    router.push(`/investor/chats?activeId=${cleanId}`)
   }
 
   const openCommit = () => {
@@ -375,12 +289,14 @@ export default function ProjectBriefPage() {
             ) : (
               <button type="button" onClick={openCommit} className={pillClass}>Commit funds</button>
             )}
+            <SupportButton ideaId={id} supported={p.supportedByMe} count={p.likes} />
             <button type="button" onClick={askForUpdate} className={quietLinkClass}>Ask for an update</button>
             {founder && (
-              <button type="button" onClick={() => handleStartChat(founder.name)} className={quietLinkClass}>
+              <button type="button" onClick={() => setChatOpen(true)} className={quietLinkClass}>
                 Message {founder.name.split(" ")[0]}
               </button>
             )}
+            <ReportButton type="idea" id={id} />
           </MoneyPanel>
 
           {founder && (
@@ -448,7 +364,7 @@ export default function ProjectBriefPage() {
           <DialogHeader className="text-left">
             <DialogTitle className="text-2xl font-medium">Commit to {p.name}</DialogTitle>
             <DialogDescription className="text-[15px] text-muted-foreground">
-              This records your intent to invest. No money moves on Something yet.
+              This records your intent to invest. No money moves on Something yet. The founder sees your name with it, even in Ghost Mode.
             </DialogDescription>
           </DialogHeader>
 
@@ -497,6 +413,15 @@ export default function ProjectBriefPage() {
           </form>
         </DialogContent>
       </Dialog>
+
+      <StartChatDialog
+        open={chatOpen}
+        onOpenChange={setChatOpen}
+        ideaId={p.id}
+        ideaTitle={p.name}
+        founderName={founder?.name}
+        role="investor"
+      />
 
       {/* Confidentiality agreement (recorded in this browser for now; see chat/future.md C9) */}
       <Dialog open={isSigningModalOpen} onOpenChange={setIsSigningModalOpen}>

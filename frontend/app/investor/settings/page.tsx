@@ -1,35 +1,14 @@
 "use client"
 
-import { useEffect, useState } from "react"
 import Link from "next/link"
 import { AccountSecurity, DeleteAccount } from "@/components/account-security"
 import { Page, PageTitle, Section } from "@/components/shell/page"
 import { Switch } from "@/components/ui/switch"
-import { toast } from "@/components/ui/use-toast"
-
-const GHOST_KEY = "investor_ghost_mode"
+import { useGhostMode } from "@/hooks/use-ghost-mode"
 
 /** Investor settings: privacy, sign-in and deletion. Profile details live on the profile page. */
 export default function InvestorSettingsPage() {
-  // Ghost Mode is still a per-browser setting (community plan C5 moves it to the server).
-  const [ghostMode, setGhostMode] = useState(false)
-
-  useEffect(() => {
-    setGhostMode(localStorage.getItem(GHOST_KEY) === "true")
-    const onChange = (e: Event) => {
-      const ce = e as CustomEvent<{ ghost: boolean }>
-      if (ce.detail) setGhostMode(ce.detail.ghost)
-    }
-    window.addEventListener("ghost-mode-change", onChange)
-    return () => window.removeEventListener("ghost-mode-change", onChange)
-  }, [])
-
-  const changeGhostMode = (on: boolean) => {
-    setGhostMode(on)
-    localStorage.setItem(GHOST_KEY, String(on))
-    window.dispatchEvent(new CustomEvent("ghost-mode-change", { detail: { ghost: on } }))
-    toast({ title: on ? "Ghost Mode on" : "Ghost Mode off", description: "Applies in this browser." })
-  }
+  const ghost = useGhostMode()
 
   return (
     <Page className="max-w-[960px]">
@@ -43,10 +22,11 @@ export default function InvestorSettingsPage() {
           <span className="text-[15px]">
             Ghost Mode
             <span className="block text-sm text-muted-foreground">
-              Look at ideas without showing up in founders&apos; view counts. Applies in this browser for now.
+              When you message a founder, they see &ldquo;Ghost investor&rdquo; and the stages you invest in, not your name,
+              until you share it. Committing money shares it. Chats you already started keep the setting they began with.
             </span>
           </span>
-          <Switch checked={ghostMode} onCheckedChange={changeGhostMode} />
+          <Switch checked={ghost.on} disabled={ghost.saving} onCheckedChange={ghost.set} />
         </label>
       </Section>
 

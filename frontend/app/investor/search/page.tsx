@@ -10,6 +10,8 @@ import { apiError, cn } from "@/lib/utils"
 import { Page, PageTitle, countOf, pillClass, quietLinkClass } from "@/components/shell/page"
 import { toast } from "@/components/ui/use-toast"
 import { IdeaCard } from "@/components/visual/idea-card"
+import { SupportButton } from "@/components/community/support-button"
+import { useGhostMode } from "@/hooks/use-ghost-mode"
 import { Skeleton } from "@/components/visual/skeleton"
 import { labelFor, normalizeList, options } from "@/lib/taxonomy"
 import { useJustInTimeQuestion } from "@/components/something-box/provider"
@@ -37,6 +39,8 @@ type Project = {
   raising: string    // a raisingBands id, "" when unset
   authorAvatar: string
   milestones: { status: "open" | "done" }[]
+  supporters: number
+  supportedByMe: boolean
 }
 
 // Shape a raw Idea doc from /ideas/discover into our Project type
@@ -54,6 +58,8 @@ const normalizeIdea = (raw: any): Project => ({
   raising:          raw.raising ?? "",
   authorAvatar:     raw.founderAvatar ?? "",
   milestones:       raw.milestones ?? [],
+  supporters:       raw.likes ?? 0,
+  supportedByMe:    Boolean(raw.supportedByMe),
 })
 
 // Ids from shared/taxonomy.json; idea tags are normalized to the same ids. Location comes from the
@@ -69,7 +75,7 @@ export default function InvestorSearchPage() {
   const [projects, setProjects]   = useState<Project[]>([])
   const [loadingProjects, setLoadingProjects] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
-  const [ghostMode, setGhostMode] = useState(false)
+  const { on: ghostMode } = useGhostMode()
 
   // Fetch ideas from the real API on mount
   const fetchProjects = useCallback(async () => {
@@ -90,17 +96,6 @@ export default function InvestorSearchPage() {
     fetchProjects()
   }, [fetchProjects])
 
-  useEffect(() => {
-    if (typeof window !== "undefined") {
-      setGhostMode(localStorage.getItem("investor_ghost_mode") === "true")
-      const handleGhost = (e: Event) => {
-        const ce = e as CustomEvent<{ ghost: boolean }>
-        if (ce.detail) setGhostMode(ce.detail.ghost)
-      }
-      window.addEventListener("ghost-mode-change", handleGhost)
-      return () => window.removeEventListener("ghost-mode-change", handleGhost)
-    }
-  }, [])
 
   // Saved ideas live on the server (the investor's pipeline starts here). Ideas saved in this
   // browser before that are copied up once, then the browser copy is removed.
@@ -242,7 +237,7 @@ export default function InvestorSearchPage() {
     <Page>
       <PageTitle title="Discover">
         {ghostMode
-          ? "Ghost Mode is on: founders don't see you in their view counts."
+          ? "Ideas founders have made public, newest first. You're in Ghost Mode: founders you message see “Ghost investor” until you share your name."
           : "Ideas founders have made public, newest first."}
       </PageTitle>
 
@@ -325,17 +320,20 @@ export default function InvestorSearchPage() {
                           milestones: r.milestones,
                         }}
                         action={
-                          <button
-                            type="button"
-                            onClick={() => toggleWatchlist(r.id)}
-                            aria-pressed={starred}
-                            className={cn(
-                              "rounded-full border px-3 py-1 text-xs transition-colors cursor-pointer",
-                              starred ? "border-gold/40 bg-gold-soft text-gold" : "border-line text-muted-foreground hover:text-foreground",
-                            )}
-                          >
-                            {starred ? "Saved" : "Save"}
-                          </button>
+                          <span className="flex items-center gap-2">
+                            <SupportButton ideaId={r.id} supported={r.supportedByMe} count={r.supporters} size="sm" />
+                            <button
+                              type="button"
+                              onClick={() => toggleWatchlist(r.id)}
+                              aria-pressed={starred}
+                              className={cn(
+                                "rounded-full border px-3 py-1 text-xs transition-colors cursor-pointer",
+                                starred ? "border-gold/40 bg-gold-soft text-gold" : "border-line text-muted-foreground hover:text-foreground",
+                              )}
+                            >
+                              {starred ? "Saved" : "Save"}
+                            </button>
+                          </span>
                         }
                       />
                     </li>
