@@ -45,7 +45,7 @@ export function IdeaFacts({
       <p className="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs">
         <SectorList sectors={sectors} />
         {views !== undefined && <span>{countOf(views, "view")}</span>}
-        {likes !== undefined && <span>{countOf(likes, "like")}</span>}
+        {likes !== undefined && <span>{countOf(likes, "supporter")}</span>}
         {comments !== undefined && <span>{countOf(comments, "comment")}</span>}
       </p>
     </div>

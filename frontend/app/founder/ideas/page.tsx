@@ -11,6 +11,8 @@ import { useSomethingBox } from "@/components/something-box/provider"
 import { PostIdeaModal, type Attachment } from "@/components/post-idea-modal"
 import { Page, PageTitle, pillClass, quietLinkClass, countOf } from "@/components/shell/page"
 import { IdeaCard } from "@/components/visual/idea-card"
+import { SupportButton } from "@/components/community/support-button"
+import { useAuth } from "@/components/auth-provider"
 import { Skeleton } from "@/components/visual/skeleton"
 
 type Tab = "yours" | "discover"
@@ -27,6 +29,7 @@ interface Idea {
   stage?: StageValue
   funding?: string
   likes: number
+  supportedByMe?: boolean
   comments: number
   views: number
   isYours?: boolean
@@ -37,6 +40,7 @@ interface Idea {
   isDraft?: boolean
   createdAt?: string
   attachments?: Attachment[]
+  moderation?: { state: "hidden" | "removed" }
 }
 
 interface IdeaFormData {
@@ -71,10 +75,11 @@ const ideasAPI = {
     return (response.data as any[]).map((i) => ({ ...normalize(i), isYours: true }))
   },
 
-  async fetchDiscoverIdeas(): Promise<Idea[]> {
+  // Everyone's ideas include the founder's own: those get Edit, not Support.
+  async fetchDiscoverIdeas(myId?: string): Promise<Idea[]> {
     const response = await apiClient.get("/ideas/discover")
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return (response.data as any[]).map((i) => ({ ...normalize(i), isYours: false }))
+    return (response.data as any[]).map((i) => ({ ...normalize(i), isYours: Boolean(myId) && String(i.founder_id) === String(myId) }))
   },
 
   /** Uploads the not-yet-uploaded files and patches their URLs in; returns the names that failed. */
@@ -114,15 +119,11 @@ const ideasAPI = {
     await apiClient.delete(`/ideas/${id}`)
   },
 
-  /** Returns the server's like count (liking twice doesn't count twice). */
-  async likeIdea(id: string): Promise<number> {
-    const response = await apiClient.post<{ likes: number }>(`/ideas/${id}/like`, {})
-    return response.data.likes
-  },
 }
 
 // ---------- Component ----------
 export default function FounderIdeasPage() {
+  const { user } = useAuth()
   const [tab, setTab] = useState<Tab>("yours")
   const [query, setQuery] = useState("")
   const [yourIdeas, setYourIdeas] = useState<Idea[]>([])
@@ -158,7 +159,7 @@ export default function FounderIdeasPage() {
         const ideas = await ideasAPI.fetchYourIdeas()
         setYourIdeas(ideas)
       } else {
-        const ideas = await ideasAPI.fetchDiscoverIdeas()
+        const ideas = await ideasAPI.fetchDiscoverIdeas(user?.id)
         setDiscoverIdeas(ideas)
       }
     } catch (err) {
@@ -166,7 +167,7 @@ export default function FounderIdeasPage() {
     } finally {
       setIsLoading(false)
     }
-  }, [tab])
+  }, [tab, user?.id])
 
   useEffect(() => {
     loadIdeas()
@@ -283,15 +284,10 @@ export default function FounderIdeasPage() {
     setIsModalOpen(false)
   }
 
-  async function handleLikeIdea(ideaId: string) {
-    try {
-      const likes = await ideasAPI.likeIdea(ideaId)
-      const setLikes = (ideas: Idea[]) => ideas.map((idea) => (idea.id === ideaId ? { ...idea, likes } : idea))
-      if (tab === "yours") setYourIdeas(setLikes)
-      else setDiscoverIdeas(setLikes)
-    } catch (err) {
-      toast({ title: "Like not saved", description: apiError(err), variant: "destructive" })
-    }
+  // Keeps the counts under the cards in step with the Support button.
+  function handleSupported(ideaId: string, next: { supported: boolean; count: number }) {
+    const apply = (ideas: Idea[]) => ideas.map((idea) => (idea.id === ideaId ? { ...idea, likes: next.count, supportedByMe: next.supported } : idea))
+    setDiscoverIdeas(apply)
   }
 
   function IdeaRow({ idea }: { idea: Idea }) {
@@ -311,17 +307,24 @@ export default function FounderIdeasPage() {
             createdAt: idea.createdAt,
             milestones: idea.milestones,
             isDraft: idea.isDraft,
+            moderation: idea.isYours ? idea.moderation?.state : undefined,
           }}
           action={
             idea.isYours ? (
               <button type="button" onClick={() => handleEditClick(idea)} className={pill}>Edit</button>
             ) : (
-              <button type="button" onClick={() => handleLikeIdea(idea.id)} className={pill}>Like</button>
+              <SupportButton
+                ideaId={idea.id}
+                supported={idea.supportedByMe}
+                count={idea.likes}
+                size="sm"
+                onChange={(next) => handleSupported(idea.id, next)}
+              />
             )
           }
         />
         <p className="mt-2 flex flex-wrap gap-x-4 text-xs text-muted-foreground">
-          <span>{countOf(idea.likes, "like")}</span>
+          <span>{countOf(idea.likes, "supporter")}</span>
           <span>{countOf(idea.comments, "comment")}</span>
           <span>{countOf(idea.views, "view")}</span>
           {idea.attachments && idea.attachments.length > 0 && <span>{countOf(idea.attachments.length, "file")}</span>}
@@ -391,7 +394,7 @@ export default function FounderIdeasPage() {
             <div className="flex flex-wrap gap-2">
               {([
                 { key: "newest", label: "Newest" },
-                { key: "likes", label: "Most liked" },
+                { key: "likes", label: "Most supported" },
                 { key: "views", label: "Most viewed" },
               ] as const).map((o) => (
                 <button key={o.key} onClick={() => setSortBy(o.key)} className={chip(sortBy === o.key)} aria-pressed={sortBy === o.key}>

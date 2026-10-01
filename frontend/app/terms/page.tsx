@@ -62,7 +62,7 @@ export default function TermsPage() {
               Content as described above, for as long as you keep it on the Service.
             </p>
             <p>
-              We delete your ideas when you ask. Deleting an idea deletes it along with its likes,
+              We delete your ideas when you ask. Deleting an idea deletes it along with its supports,
               comments and files, and cancels any commitments made to it. Deleting your account deletes
               everything you posted or committed; comments you wrote on other people&apos;s ideas stay up
               without your name.
