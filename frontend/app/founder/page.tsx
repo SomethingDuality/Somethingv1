@@ -15,7 +15,9 @@ import { TRIED_SOMETHING_KEY } from "@/lib/first-run"
 import { IdeaCover } from "@/components/visual/idea-cover"
 import { MilestoneMeter } from "@/components/visual/idea-card"
 import { MoneyPanel } from "@/components/visual/money-panel"
+import { LeaderboardCard } from "@/components/community/leaderboard-card"
 import { SkeletonRows } from "@/components/visual/skeleton"
+import { MatchedIdeas } from "@/components/matching/matched-ideas"
 
 type Idea = {
   _id: string
@@ -167,7 +169,9 @@ export default function FounderHome() {
             {overview === null ? (
               <SkeletonRows />
             ) : teammates.length === 0 ? (
-              <p className="text-[15px] leading-relaxed text-muted-foreground">Just you so far. Inviting co-founders comes with chats.</p>
+              <p className="text-[15px] leading-relaxed text-muted-foreground">
+                Just you so far. When someone asks to join an idea, invite them from that chat. <Link href="/founder/teams" className="text-foreground underline underline-offset-4">Teams</Link>
+              </p>
             ) : (
               <ul className="divide-y divide-border">
                 {overview.team.map((m) => (
@@ -179,6 +183,8 @@ export default function FounderHome() {
               </ul>
             )}
           </Section>
+
+          <LeaderboardCard kind="ideas" role="founder" title="Top ideas" />
         </Aside>
 
         <Main>
@@ -209,7 +215,7 @@ export default function FounderHome() {
                             <span className="text-gold">{usd(overview!.committedByIdea[idea._id])} committed</span>
                           )}
                           <MilestoneMeter milestones={idea.milestones} />
-                          <span>{countOf(idea.likes ?? 0, "like")}</span>
+                          <span>{countOf(idea.likes ?? 0, "supporter")}</span>
                           <span>{countOf(idea.comments ?? 0, "comment")}</span>
                         </span>
                       </span>
@@ -220,11 +226,13 @@ export default function FounderHome() {
             )}
           </Section>
 
+          <MatchedIdeas role="founder" />
+
           <Section title="Recent activity">
             {overview === null ? (
               <SkeletonRows />
             ) : overview.activity.length === 0 ? (
-              <p className="text-[15px] text-muted-foreground">Nothing yet. Likes, comments and commitments on your ideas show up here.</p>
+              <p className="text-[15px] text-muted-foreground">Nothing yet. Supporters, comments and commitments on your ideas show up here.</p>
             ) : (
               <ul className="divide-y divide-border">
                 {overview.activity.map((a) => (
