@@ -104,7 +104,8 @@ jobs:
           version=$(node -p "require('$GITHUB_WORKSPACE/Mutiny_backend_private/package.json').devDependencies['mongodb-memory-server']")
           mkdir -p mms && cd mms && npm init -y > /dev/null
           npm install --no-audit --no-fund --ignore-scripts "mongodb-memory-server@$version"
-          echo "MONGOD_BIN=$(node -e "require('mongodb-memory-server').MongoBinary.getPath().then((p) => console.log(p))")" >> "$GITHUB_ENV"
+          # Written from Node, not captured from stdout: a first download prints its progress there.
+          node -e "require('mongodb-memory-server').MongoBinary.getPath().then((p) => require('fs').appendFileSync(process.env.GITHUB_ENV, 'MONGOD_BIN=' + p + '\n'))"
       - run: pytest -q
 
   backend:
