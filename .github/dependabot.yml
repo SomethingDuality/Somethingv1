@@ -1,0 +1,32 @@
+# Dependabot, kept quiet for a repo full of contributors' pull requests:
+#   - the actions CI uses: one grouped pull request a month;
+#   - the apps' packages: security fixes only. `open-pull-requests-limit: 0` turns routine version
+#     bumps off, and the security pull requests still come once "Dependabot security updates" is on
+#     in Settings → Advanced Security.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+
+  - package-ecosystem: npm
+    directory: /Mutiny_backend_private
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+
+  - package-ecosystem: pip
+    directory: /agent
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0

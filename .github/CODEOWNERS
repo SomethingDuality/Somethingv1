@@ -1,0 +1,9 @@
+# Every pull request needs a review from one of the owners (with "Require review from Code Owners"
+# on in branch protection). CI and repo settings, the agent's model routing and the auth code are
+# listed on their own so they can be given stricter owners later.
+*                                         @Somay-kousis @somelamedude-git
+/.github/                                 @Somay-kousis @somelamedude-git
+/agent/app/models/                        @Somay-kousis @somelamedude-git
+/agent/app/core/                          @Somay-kousis @somelamedude-git
+/Mutiny_backend_private/src/controllers/user.controller.js  @Somay-kousis @somelamedude-git
+/Mutiny_backend_private/src/middleware/   @Somay-kousis @somelamedude-git

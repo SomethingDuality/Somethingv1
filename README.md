@@ -1,264 +1,113 @@
-div align="center">
-  <br/>
+# Something
 
-  <!-- Animated brand logo -->
-  <img src="logo.svg" width="220" height="220" alt="something logo" />
+Something helps people with startup ideas find the people they need: a co-founder who can build, an investor who backs that kind of idea, or a community that has the problem the idea solves. Most of the time those introductions happen through who you already know. We want them to happen because of what you've actually built.
 
-  <h1 style="font-size: 30px; font-weight: 500; letter-spacing: -0.04em; color: #FFFFFF; font-family: -apple-system, BlinkMacSystemFont, sans-serif; margin-top: 10px; border-bottom: none; margin-bottom: 0;">something</h1>
-  <p style="font-size: 10.5px; font-family: monospace; letter-spacing: 0.25em; text-transform: uppercase; color: rgba(255,255,255,0.35); margin-top: 6px; margin-bottom: 30px;">ideas find their people • capital finds its purpose</p>
-</div>
+If this is your first time contributing to open source, you're in the right place. This page explains what the app does, how the code fits together, and how to get your first change merged, one step at a time.
 
----
+## What the app does
 
-## 1. Ideology & The Dual-Agent Model
+A founder writes down an idea. Before anyone else sees it, two AI readers go through it. **Something** argues for the idea and points out what's strong about it. **Nothing** argues against it and asks the uncomfortable questions: who actually has this problem, would they pay, can it be built. The founder can reply to Nothing and push back with evidence.
 
-The venture capital ecosystem is structurally optimized for **pitching**, not building. It values hyper-visibility over architectural truth. 
+When the founder is ready, they post the idea publicly with some proof of work, like a prototype or a first customer. Every 7 days, investors get a short list of public ideas that match what they invest in, and founders get ideas that are looking for their skills. People can also post problems they face, chat, and form teams.
 
-**Something** is an experimental development playground built to re-align this relationship. It introduces a dual-agent reasoning model that forces creators to challenge their conviction before requesting capital:
+## How the code fits together
 
-```
-        SOMETHING [Belief Resonance] ────────┐
-                                            ├─► CLARITY
-        NOTHING [Doubt Stress-Test]  ───────┘
-```
+The repo has four folders you'll care about.
 
-* **Something (The Operator / Belief)**: Maps emotional resonance, validates viral hooks, and maps lock-in loops using a local-first SQLite sync architecture.
-* **Nothing (The Critic / Doubt)**: Stress-tests database scalability boundaries, computes adoption friction, and calculates user churn risks.
+| Folder | What it is | Language |
+|---|---|---|
+| `frontend/` | The website people see | TypeScript, Next.js, React, Tailwind |
+| `Mutiny_backend_private/` | The API: accounts, ideas, chats, teams | JavaScript, Node.js, Express, MongoDB |
+| `agent/` | The AI part: the two readers, memory, matching | Python, FastAPI, LangGraph |
+| `shared/` | Lists all three use, like the sectors an idea can be in | JSON |
 
-### The Indian Startup Bottleneck (Why This Matters)
-- **The Team Formation Bottleneck**: CB Insights' postmortem analysis puts “not having the right team” at roughly **23.37% of startup failures**. In India, with over 55,234 startups receiving DPIIT recognition in FY26 (a 51.62% YoY jump), finding cofounders and builders remains network-restricted.
-- **Capital-Discovery Friction**: Cold emails to VCs see a **95.93% non-reply rate**, while warm introductions convert **10–20x better**. Cold-sourced deals take twice as long to close, wasting runway.
-- **Distribution Gap**: India has 164+ active angel networks and 700+ incubators, yet only **~5% of registered startups** raise funding. Access is gated by network-centric sourcing.
+(The API folder has an old name; the product used to be called Mutiny.)
 
----
+The browser only ever talks to the API. When something needs the AI, the API asks the agent and passes the answer back, so the agent is never open to the internet directly. The two AI readers run on fake answers when you develop locally, which means you don't need any paid AI keys to work on the project.
 
-## 2. Platform Architecture & User Paths
+## Run it on your computer
 
-Something replaces typical directories with verified, reputation-backed workflows.
+You need [Git](https://git-scm.com/downloads), [Node.js 24](https://nodejs.org/) and [Python 3.12](https://www.python.org/downloads/). You don't need to install a database, because the API starts its own.
 
-```mermaid
-graph TD
-    A[Founder Idea] --> B{Choose Path}
-    B -->|Refine Path| C[Dual AI Review: Something vs. Nothing]
-    C -->|Feedback Loop| D[Private Draft & Iteration]
-    B -->|Post Path| E[Proof-of-Work Verification]
-    E -->|Approved| F[Public Active Project]
-    F -->|Community Upvotes| G[Reputation Points]
-    F -->|Community Funding| H[Milestone Escrow Pipeline]
-```
+Open three terminal windows, one for each part, and start them in this order:
 
-### The Two Founder Paths
-1. **Refine Path (Private & Free)**: Ideas go through private adversarial review from `Something` (validating belief/hooks) and `Nothing` (critiquing limits, economics, compliance, and churn risk) before anything goes public.
-2. **Post Path (Public & Verified)**: Requires verifiable proof of work (such as a prototype, live product, signed pilot customer, patent filing, or press coverage) before listing. Presence on the platform is a signal of legitimacy.
-
-### The Agentic Matching & Synergy Scouting Engine
-
-Something implements a multi-stage, orchestrator-driven matching pipeline to connect founders with complementary partners and similar peers.
-
-```mermaid
-graph TD
-    %% Styling Definitions
-    classDef refine fill:#fef3c7,stroke:#d97706,stroke-width:2px,color:#451a03;
-    classDef snn fill:#f0fbf6,stroke:#10b981,stroke-width:2px,color:#064e3b;
-    classDef agentic fill:#f4f0ff,stroke:#6366f1,stroke-width:2px,color:#1e1b4b;
-    classDef filter fill:#f1f5f9,stroke:#64748b,stroke-width:1px,color:#0f172a;
-    classDef orch fill:#fff1f2,stroke:#f43f5e,stroke-width:2px,color:#4c0519;
-
-    %% --- CENTRAL ORCHESTRATION ---
-    Orch[Central Orchestrator & State Machine<br><i>Manages state transitions, memory routing, & loop logic</i>]
-    class Orch orch;
-
-    %% --- STEP 0: INPUT ---
-    Start([User Posts Raw Idea / Voice Note / Essay]) --> Step1
-
-    %% --- STEP 1: UNIVERSAL REFINEMENT ---
-    subgraph Stage1 [Stage 1: Universal Refinement & Standardization]
-        Step1[Step 1: Normalization Agent<br><i>Fast/Flash LLM rewrites raw input into a standard schema</i>]
-        Step1 --> Schema[Standardized Universal Profile<br>1. Core Problem & Industry<br>2. What I Have - Tech/Distribution/Skills<br>3. What I Need - Missing Puzzle Pieces]
-    end
-    class Step1,Schema refine;
-
-    Schema --> Orch
-
-    %% --- STEP 2: SNN SCOUTING WITH CROSS-ATTENTION ---
-    Orch --> Step2_Sim
-    Orch --> Step2_Comp
-
-    subgraph Stage2 [Stage 2: High-Speed SNN Vector Scouting with Cross-Attention]
-        Step2_Sim[Track A: Similarity Search<br><i>SNN compares 'What I Have' vs. Lakhs of 'What I Have'</i>]
-        Step2_Comp[Track B: Complementary Search<br><i>SNN compares 'What I Need' vs. Lakhs of 'What I Have'</i>]
-        
-        %% Cross Attention Bridge
-        Step2_Sim <--> |"Cross-Attention Layer<br>(Contextual Weight Adjustments)"| Step2_Comp
-    end
-    class Step2_Sim,Step2_Comp snn;
-
-    Step2_Sim --> Shortlist_Sim[Top 15 Similar Peers]
-    Step2_Comp --> Shortlist_Comp[Top 15 Complementary Partners]
-    class Shortlist_Sim,Shortlist_Comp filter;
-
-    %% --- STEP 3: HARD METADATA FILTERING ---
-    Shortlist_Sim --> Gate[Step 3: Metadata Gatekeeper<br><i>Filter out non-negotiables: Stage, Location, Language, Commitment</i>]
-    Shortlist_Comp --> Gate
-    class Gate filter;
-
-    Gate --> Finalists[Top 3 to 5 Highly Aligned Candidates]
-    class Finalists filter;
-
-    Finalists --> Orch
-
-    %% --- STEP 4: STRATEGIC REASONING & JOINT ATTENTION ---
-    subgraph Stage3 [Stage 3: Agentic Reasoning & Synergy Critique]
-        Orch --> Step4[Step 4: Reasoning & Critique Agent<br><i>Evaluates qualitative synergy: Do they actually fit without clashing?</i>]
-        
-        JointAttn["Joint Attention Space<br><i>Deep Feature Interleaving<br>(User Profile ⊗ Candidate Profiles)</i>"]
-        Step4 <--> JointAttn
-    end
-    class Step4,JointAttn agentic;
-
-    Step4 --> Check{Is Match Truly Synergistic?}
-    class Check agentic;
-
-    %% --- FEEDBACK LOOPS ---
-    %% Loop A: Internal Critique Rejection
-    Check -- "No (False Positive)" --> Replan[Log Critique & Adjust Dynamic Embedding Weights]
-    class Replan filter;
-    Replan --> Orch
-
-    %% Loop B: Successful Match & Execution
-    Check -- Yes --> Step5[Step 5: Outreach & Memory Logging<br><i>Generate custom briefing explaining the exact synergy</i>]
-    class Step5 agentic;
-
-    Step5 --> End([Notify Users: 'We found your missing puzzle piece!'])
-
-    %% Loop C: Post-Outreach Continuous Learning
-    End -.-> |"Continuous Feedback Loop<br>(User Accept/Reject Signals)"| Orch
-```
-
-#### Pipeline Stages:
-1. **Stage 1: Normalization & Standardization**: A fast LLM maps unstructured raw inputs into a schema covering the problem area, asset capabilities (*"What I Have"*), and resource needs (*"What I Need"*).
-2. **Stage 2: SNN Vector Scouting**: Employs dual Similarity and Complementary vector search tracks with cross-attention weights to identify relevant candidate pools.
-3. **Stage 3: Hard Metadata Gatekeeping**: Checks location, stage, commitment, and language requirements to filter results to the most viable matches.
-4. **Stage 4: Strategic Synergy Critique**: A reasoning agent performs critique over candidate synergy in a Joint Attention Space. Success initiates custom briefing outreach, while mismatches feed back to adjust dynamic embedding weights.
-
----
-
-## 3. Trust Infrastructure & Milestone Escrow
-
-We replace standard checklists with a secure **Milestone Escrow Pipeline**:
-
-```
-[ Idea Posted ] ──► [ Community Pledges ] ──► [ Escrow Locked ]
-                                                    │
-[ Funds Released ] ◄── [ Committee Review ] ◄── [ Proof Submitted ]
-```
-
-1. **Escrow Lock**: Project capital is secured in milestone pools.
-2. **Deliverable Submission**: Founders request payout releases by providing structured evidence logs (GitHub tags, test suites, live links, and work summaries).
-3. **Review Board Verification**: Releases require approval from ≥ 50% of the active review committee members.
-
----
-
-## 4. Technical Blueprint
-
-The workspace is organized as a clean mono-repo separation between our Node reasoning core and the client interfaces:
-
-```
-Something/
-├── backend/                  # Conviction API Core (Node.js & Express)
-│   └── src/
-│       ├── models/           # Mongoose schemas (Escrows, Users, Matches, Firms)
-│       ├── utils/            # Calculation vectors, mail utilities
-│       └── app.js            # Routing orchestration
-│
-├── frontend/                 # Client Workspace (Next.js 15 & React 19)
-│   ├── app/
-│   │   ├── founder/          # Founder workspaces (chats, funding, ideas, mutiny, problems)
-│   │   ├── investor/         # Investor workspaces (investments, profile, settings, chats)
-│   │   └── terms/            # Legal terms & conditions
-│   │
-│   ├── components/           # Radix UI shared primitives
-│   ├── hooks/                # React utility hooks
-│   └── lib/                  # State definitions, API clients & queries
-│
-└── README.md
-```
-
-### Frontend-Backend Integration & Axios Clients
-The frontend communicates with the backend via three configurations:
-- **Client A ([axios.ts](file:///Users/apple/Something/frontend/lib/axios.ts))**: Named `apiClient` instance with automatic JWT Authorization header injection and `401` interceptor redirection. Used for `/auth/*` endpoints.
-- **Client B**: Raw `axios` concatenated with `NEXT_PUBLIC_API_BASE_URL` (for founder pages).
-- **Client C**: Raw relative path `axios` calls (for investor pages), requiring Next.js rewrites or migration to `apiClient`.
-
----
-
-## 5. Monetization Engine (The 6-Stream Model)
-
-We monetize access to a verified network and crowd signals:
-
-| Phase | Stream | Who Pays | Pricing Model |
-| :--- | :--- | :--- | :--- |
-| **At Validation** | Corporate Validation Sprints | Enterprise Product Teams | ₹3L – ₹5L per sprint |
-| **At Validation** | Accelerator Cohort Access | Accelerators / Incubators | ₹1L – ₹2L/month retainer |
-| **At Funding** | 1% Equity on Forwarded Pitch | Funded Founders | 1% equity on match |
-| **At Funding** | 5% Escrow Take Rate | Successful Founders | 5% of GMV raised |
-| **At Funding** | VC Scout Thesis Matching | VC Funds | ₹50K – ₹1.5L/month + success |
-| **After Funding** | Verified Talent Placement | Hiring Companies | ₹1L – ₹3L per placement |
-| **Recurring** | Premium Refine Tiers | Serious Founders (Builder/Studio) | ₹999 – ₹2,499/month |
-| **Recurring** | Investor Subscriptions | Angels / VCs | ₹3,500 – ₹15,000/month |
-
----
-
-## 6. Go-to-Market (GTM) Flywheel
-
-Our user acquisition is divided into 5 phases with 10 specific plays:
-
-* **Phase 1: Launch & Acquisition (M1–M3)**: Product Hunt launch, **The Warm Intro Machine** (curated fortnightly investor newsletter), **The Investors Are In** (live investor reactions to verified ideas), and **"The 5% Problem" Campaign** targeting un-funded startups.
-* **Phase 2: The Competition (M3+)**: Gamified leaderboard where founders earn reputation points. Top 100 pitch; top 10 receive VC introductions.
-* **Phase 3: The Content Engine (Ongoing)**: **The Nothing Report** (monthly analysis of anonymized critique data), **The Funded Idea Archive** (registry of success stories), and **Live Pitch Battle** videos.
-* **Phase 4: Partnerships (M4–M8)**: University E-Cell integrations (IITB, IIITM Gwalior, BITS Pilani, SRMIST) and patent firm pipelines (referrals from Legalwiz, IndiaFilings, LexOrbis).
-* **Phase 5: Influencer Program (Ongoing)**: Tiered rewards (cash + internship/offers) for creators based on referral metrics.
-
----
-
-## 7. Visual Directives
-
-The platform employs a dark-mode minimalist style, prioritizing spacious layouts over card boxes and borders:
-
-* **Open Space**: Page headers use typography alignment with thin borders rather than rigid container frames.
-* **Translucent Surfaces**: Elements use high backdrop blurs (`backdrop-blur-xl bg-white/[0.015] border-white/5`) to float over ambient background glow layers.
-* **Equilibrium Indicators**: Duality ratings are balanced through minimal inline logs and simple text-link actions instead of generic SaaS button grids.
-
----
-
-## 8. Getting Started
-
-### Backend Core
 ```bash
-# Navigate to backend
-cd backend
-
-# Install dependencies
+# 1. The API, on http://localhost:5050
+cd Mutiny_backend_private
+cp .env.example .env
 npm install
-
-# Run backend development server
-npm run dev
+npm run dev:memory
 ```
 
-### Frontend Workspace
+Open `Mutiny_backend_private/.env` and give `ACCESS_TOKEN_SECRET` and `REFRESH_TOKEN_SECRET` two different long random strings before you start it. Wait until the terminal prints `[dev:memory] seeded`.
+
 ```bash
-# Navigate to frontend
+# 2. The agent, on http://localhost:8000
+cd agent
+python3.12 -m venv .venv
+.venv/bin/pip install -r requirements-dev.txt
+cp .env.example .env
+.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
+```bash
+# 3. The website, on http://localhost:3000
 cd frontend
-
-# Install dependencies
 npm install
-
-# Start Next.js server
 npm run dev
 ```
 
----
+Now open http://localhost:3000/login. There are two buttons, "Continue as test founder" and "Continue as test investor", so you can try both sides without making an account. The test data disappears when you stop the API, which is on purpose.
 
-<div align="center">
-  <p style="font-size: 10px; font-family: monospace; color: rgba(255,255,255,0.25);">ideas find their people.</p>
-</div>
+On Windows, use `copy` instead of `cp`, and `.venv\Scripts\pip` and `.venv\Scripts\uvicorn` instead of the `.venv/bin/` paths (or run everything inside [WSL](https://learn.microsoft.com/windows/wsl/install), which behaves like the commands above).
+
+If something doesn't start, read the error in the terminal first; it usually names the missing piece. Still stuck? Open an issue and paste the error.
+
+## Your first pull request
+
+A pull request (PR) is how you suggest a change. You make the change in your own copy of the project, then ask us to pull it into ours.
+
+1. **Find something to work on.** Issues labelled `good first issue` are a good start. If you want to fix something that has no issue yet, open one first and say what you plan to do, so nobody spends a weekend on the same thing.
+2. **Fork the repo.** Click "Fork" at the top of the GitHub page. That gives you your own copy you can change freely.
+3. **Clone your fork and make a branch.** A branch keeps your change separate from everything else:
+   ```bash
+   git clone https://github.com/YOUR-USERNAME/Somethingv1.git
+   cd Somethingv1
+   git checkout -b fix-short-description
+   ```
+4. **Make your change, then run the checks** for the folders you touched. [CONTRIBUTING.md](CONTRIBUTING.md) lists the exact commands. If you fixed a bug, add a test that would have caught it.
+5. **Save and send your change:**
+   ```bash
+   git add the/files/you/changed
+   git commit -m "Fix the date on comments in the idea page"
+   git push origin fix-short-description
+   ```
+6. **Open the pull request.** GitHub shows a "Compare & pull request" button on your fork. Fill in the short template: what you changed and how you checked it.
+
+After you open it, our automatic checks (called CI) run the tests for the parts you changed. A green tick means they passed. A red cross means something broke; click "Details" to see which test failed, fix it, and push again to the same branch. The PR updates by itself. Then one of the maintainers reviews it, may ask for changes, and merges it.
+
+Don't worry about getting it perfect the first time. Most PRs go through a round or two of changes, and asking questions in the PR is completely fine.
+
+## A few rules
+
+- **Never put passwords, keys or `.env` files in a commit.** Use the `.env.example` files as templates and keep your real values on your computer.
+- Keep each PR about one thing. Three small PRs get reviewed much faster than one big one.
+- Changes to the look of the app need a screenshot in the PR. The app uses a black background, one dark theme and the Geist font, and the landing page stays as it is.
+- Tests never call a paid AI service; the agent has fake answers for that.
+- If you find a security problem, tell a maintainer privately instead of opening a public issue.
+- Be kind in issues and reviews. Everyone here is learning something.
+
+## Words you'll see in the code
+
+| Word | Meaning |
+|---|---|
+| Something / Nothing | The two AI readers: one argues for an idea, one against |
+| Review | One run of both readers over an idea |
+| Deal flow | The weekly list of matched ideas an investor gets |
+| Ghost Mode | Investors can chat without showing their name until they choose to |
+| Something box | The small helper in the corner that asks one question at a time |
+| Memory | What the agent remembers about a founder and their ideas, so it doesn't ask twice |
+
+## Getting help
+
+Open an issue with your question, or comment on your pull request. The maintainers are [@Somay-kousis](https://github.com/Somay-kousis) and [@somelamedude-git](https://github.com/somelamedude-git).

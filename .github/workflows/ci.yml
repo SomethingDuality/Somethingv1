@@ -1,0 +1,199 @@
+# CI for every push and pull request, built for a public repo with many outside contributors:
+#   - pull requests from forks run with a read-only token and no secrets (`pull_request`, never
+#     `pull_request_target`), so a contributor's code can't reach anything private;
+#   - only the parts a change touches are tested (agent, backend, frontend), so many PRs stay cheap;
+#   - one check, "CI passed", sums it up: make that the single required check in branch protection
+#     (jobs skipped because their part didn't change count as passed).
+# Nothing here deploys, so the workflow holds no secrets.
+name: CI
+
+on:
+  push:
+    branches: [main, "ux/**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch or pull request cancels the run still going for the older one.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "24"
+  NEXT_TELEMETRY_DISABLED: "1"
+
+jobs:
+  changes:
+    name: What changed
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      agent: ${{ steps.diff.outputs.agent }}
+      backend: ${{ steps.diff.outputs.backend }}
+      frontend: ${{ steps.diff.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          # A new branch, or a base we can't see: test everything.
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            files="*"
+          else
+            files=$(git diff --name-only "$BASE...$HEAD")
+          fi
+          printf '%s\n' "$files"
+          touched() { [ "$files" = "*" ] || printf '%s\n' "$files" | grep -qE "$1"; }
+          # shared/ is generated into all three apps; a change to CI itself tests everything.
+          for area in agent:'^(agent/|shared/|\.github/)' backend:'^(Mutiny_backend_private/|shared/|\.github/)' frontend:'^(frontend/|shared/|\.github/)'; do
+            name=${area%%:*}; pattern=${area#*:}
+            if touched "$pattern"; then echo "$name=true" >> "$GITHUB_OUTPUT"; else echo "$name=false" >> "$GITHUB_OUTPUT"; fi
+          done
+
+  shared:
+    name: Shared files in sync
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      # The taxonomy, moderation lists, question bank and agent collections are generated into
+      # each app from shared/; a hand edit in one copy fails here.
+      - run: node shared/sync.mjs --check
+
+  agent:
+    name: Agent (pytest, ruff)
+    needs: changes
+    if: needs.changes.outputs.agent == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: agent/requirements*.txt
+      - run: pip install -r requirements-dev.txt
+      - run: ruff check . --exclude .venv
+      # The tests start their own single-node replica set (transactions need one). The mongod
+      # binary is the one mongodb-memory-server downloads for the backend's tests.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/mongodb-binaries
+          key: mongodb-binaries-${{ runner.os }}-${{ hashFiles('Mutiny_backend_private/package.json') }}
+      - name: Get a mongod binary
+        working-directory: ${{ runner.temp }}
+        run: |
+          export MONGOMS_DOWNLOAD_DIR="$HOME/.cache/mongodb-binaries"
+          # The same version range the backend's tests use, installed on its own (not the whole backend).
+          version=$(node -p "require('$GITHUB_WORKSPACE/Mutiny_backend_private/package.json').devDependencies['mongodb-memory-server']")
+          mkdir -p mms && cd mms && npm init -y > /dev/null
+          npm install --no-audit --no-fund --ignore-scripts "mongodb-memory-server@$version"
+          echo "MONGOD_BIN=$(node -e "require('mongodb-memory-server').MongoBinary.getPath().then((p) => console.log(p))")" >> "$GITHUB_ENV"
+      - run: pytest -q
+
+  backend:
+    name: Backend (node tests)
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: Mutiny_backend_private
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/mongodb-binaries
+          key: mongodb-binaries-${{ runner.os }}-${{ hashFiles('Mutiny_backend_private/package.json') }}
+      - run: echo "MONGOMS_DOWNLOAD_DIR=$HOME/.cache/mongodb-binaries" >> "$GITHUB_ENV"
+      # package-lock.json is git-ignored in this folder, so this is `npm install`, not `npm ci`:
+      # versions can drift between runs until the lockfile is committed.
+      - run: npm install --no-audit --no-fund
+      - run: npm test
+
+  frontend:
+    name: Frontend (typecheck, lint, tests, build)
+    needs: changes
+    if: needs.changes.outputs.frontend == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - uses: actions/cache@v4
+        with:
+          path: frontend/.next/cache
+          key: next-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}-${{ hashFiles('frontend/app/**', 'frontend/components/**', 'frontend/lib/**', 'frontend/hooks/**') }}
+          restore-keys: next-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}-
+      # next/font downloads Inter and Outfit from Google Fonts during the build, and Google now and
+      # then sends CSS next/font can't read (1 build in 5 on 2026-10-02). Only that failure is
+      # retried, once, so a pull request doesn't go red for it; any other build error fails at once.
+      - name: npm run build
+        run: |
+          set -o pipefail  # the default shell doesn't set it; without it `| tee` hides a failed build
+          if npm run build 2>&1 | tee "$RUNNER_TEMP/build.log"; then exit 0; fi
+          if grep -qE 'next/font|from Google Fonts' "$RUNNER_TEMP/build.log"; then
+            echo "::warning::Google Fonts failed during the build; retrying once"
+            npm run build
+          else
+            exit 1
+          fi
+
+  dependencies:
+    name: New dependencies
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      # A pull request that adds or upgrades a package with a known high or critical vulnerability
+      # fails here. It reads GitHub's dependency graph for the diff; no checkout, no secrets.
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+
+  ci:
+    name: CI passed
+    if: always()
+    needs: [changes, shared, agent, backend, frontend, dependencies]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Every job passed or was skipped
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          case " $RESULTS " in
+            *" failure "*|*" cancelled "*) exit 1 ;;
+          esac
