@@ -1,6 +1,6 @@
 "use client"
 
-import React, { createContext, useCallback, useContext, useState, useEffect, useRef } from 'react'
+import React, { createContext, useCallback, useContext, useMemo, useState, useEffect, useRef } from 'react'
 import { useAuth } from '@/components/auth-provider'
 
 type AvatarContextType = {
@@ -29,7 +29,7 @@ const write = (key: string, value: string | null) => {
 }
 
 export function AvatarProvider({ children }: { children: React.ReactNode }) {
-  const { user, loading } = useAuth()
+  const { user, loading, checked } = useAuth()
   const [avatarUrl, setAvatarUrlState] = useState<string | null>(null)
   const [userName, setUserNameState] = useState<string>('')
 
@@ -46,7 +46,8 @@ export function AvatarProvider({ children }: { children: React.ReactNode }) {
   const userId = user?.id ?? null
   const owner = useRef<string | null | undefined>(undefined)
   useEffect(() => {
-    if (loading) return
+    // Not before /auth/me has answered (a public page may skip it): until then nobody is known.
+    if (loading || !checked) return
     if (!userId || (owner.current !== undefined && owner.current !== userId)) {
       setAvatarUrlState(null)
       setUserNameState('')
@@ -54,7 +55,7 @@ export function AvatarProvider({ children }: { children: React.ReactNode }) {
       write(NAME_KEY, null)
     }
     owner.current = userId
-  }, [loading, userId])
+  }, [loading, checked, userId])
 
   // Stable, so pages can list them as effect dependencies without re-running on every render.
   const setAvatarUrl = useCallback((url: string | null) => {
@@ -67,8 +68,10 @@ export function AvatarProvider({ children }: { children: React.ReactNode }) {
     write(NAME_KEY, name)
   }, [])
 
+  const value = useMemo(() => ({ avatarUrl, setAvatarUrl, userName, setUserName }), [avatarUrl, setAvatarUrl, userName, setUserName])
+
   return (
-    <AvatarContext.Provider value={{ avatarUrl, setAvatarUrl, userName, setUserName }}>
+    <AvatarContext.Provider value={value}>
       {children}
     </AvatarContext.Provider>
   )

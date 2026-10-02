@@ -5,6 +5,8 @@ import Link from "next/link"
 import { IdeaReach } from "@/components/matching/matched-ideas"
 import { useParams, useRouter } from "next/navigation"
 import apiClient, { assetUrl, isUploadPath, openUpload } from "@/lib/axios"
+import { cached } from "@/lib/api-cache"
+import { dealFlowApi } from "@/lib/agent-transport"
 import { apiError } from "@/lib/utils"
 import { Aside, Main, Page, PageTitle, Section, Split, pillClass, quietLinkClass, relativeTime, usd } from "@/components/shell/page"
 import { FounderCard, type FounderCardData } from "@/components/founder-card"
@@ -12,7 +14,7 @@ import { fileKind } from "@/lib/files"
 import { IdeaCover } from "@/components/visual/idea-cover"
 import { IdeaFacts } from "@/components/visual/idea-facts"
 import { MoneyPanel } from "@/components/visual/money-panel"
-import { IdeaUpdates } from "@/components/idea-updates"
+import { IdeaUpdates, fetchUpdates, type Update } from "@/components/idea-updates"
 import { IdeaMilestones, toMilestone, type Milestone } from "@/components/idea-milestones"
 import { useAuth } from "@/components/auth-provider"
 import { labelFor } from "@/lib/taxonomy"
@@ -88,11 +90,11 @@ export default function IdeaDetailsPage() {
   const [comments, setComments] = useState<Comment[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // Started with the idea and handed to the sections that show them.
+  const [updatesRequest, setUpdatesRequest] = useState<Promise<Update[]>>()
+  const [reachRequest, setReachRequest] = useState<Promise<{ investors: number; founders: number }>>()
 
-  // Feedback states
   const { user } = useAuth()
-  const [commentInput, setCommentInput] = useState("")
-  
 
   const handleShareClick = () => {
     if (typeof window !== "undefined") {
@@ -111,10 +113,23 @@ export default function IdeaDetailsPage() {
     setIsLoading(true)
     setError(null)
 
+    // The id is in the URL: the idea, its comments and its updates are asked for together. The
+    // reach is only for the founder's own ideas, so it starts early only when this tab knows
+    // the idea is theirs (else IdeaReach asks once the idea says so).
+    const ideaRequest = apiClient.get(`/ideas/${id}`)
+    const commentsRequest = apiClient.get<{ success: boolean; comments: Comment[] }>(`/ideas/${id}/comments`)
+    const updates = fetchUpdates(id)
+    const own = cached<{ _id: string }[]>("/ideas/user")?.some((i) => String(i._id) === id)
+    const reach = own ? dealFlowApi.reach(id) : undefined
+    // Each is awaited later (or by its section); until then a failure isn't "unhandled".
+    for (const p of [commentsRequest, updates, reach]) p?.catch(() => {})
+    setUpdatesRequest(updates)
+    setReachRequest(reach)
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let ideaData: any
     try {
-      ideaData = (await apiClient.get(`/ideas/${id}`)).data
+      ideaData = (await ideaRequest).data
     } catch (err) {
       setError(apiError(err, "Couldn't load this idea."))
       setIsLoading(false)
@@ -129,7 +144,7 @@ export default function IdeaDetailsPage() {
     })
 
     try {
-      const commentsRes = await apiClient.get<{ success: boolean; comments: Comment[] }>(`/ideas/${id}/comments`)
+      const commentsRes = await commentsRequest
       setComments(commentsRes.data?.comments ?? [])
     } catch {
       setComments([])
@@ -146,12 +161,9 @@ export default function IdeaDetailsPage() {
   const saveIdeaState = (updatedIdea: Idea) => setIdea(updatedIdea)
 
 
-  const handleAddComment = async () => {
-    if (!idea || !commentInput.trim()) return
-
-    const commentText = commentInput.trim()
-    setCommentInput("")
-
+  /** False when it wasn't posted: the form puts the text back. */
+  const postComment = async (commentText: string): Promise<boolean> => {
+    if (!idea) return true
     try {
       const res = await apiClient.post<{ success: boolean; comment: Comment }>(`/ideas/${id}/comments`, { text: commentText })
       if (res.data?.success && res.data.comment) {
@@ -159,10 +171,11 @@ export default function IdeaDetailsPage() {
         setComments(updatedComments)
         saveIdeaState({ ...idea, commentsCount: updatedComments.length })
       }
+      return true
     } catch (err) {
       // No fake local comment: keep the text so the user can retry, and say what went wrong.
-      setCommentInput(commentText)
       toast({ title: "Comment not posted", description: apiError(err, "Check your connection and try again."), variant: "destructive" })
+      return false
     }
   }
 
@@ -248,7 +261,7 @@ export default function IdeaDetailsPage() {
             </div>
           )}
 
-          {isOwner && !idea.isDraft && <IdeaReach ideaId={idea.id} />}
+          {isOwner && !idea.isDraft && <IdeaReach ideaId={idea.id} request={reachRequest} />}
 
           {!isOwner && idea.founder && (
             <Section title="Founder">
@@ -292,7 +305,7 @@ export default function IdeaDetailsPage() {
         </Aside>
 
         <Main>
-          <IdeaUpdates ideaId={idea.id} isOwner={isOwner} />
+          <IdeaUpdates ideaId={idea.id} isOwner={isOwner} request={updatesRequest} />
 
           <IdeaMilestones
             ideaId={idea.id}
@@ -302,16 +315,7 @@ export default function IdeaDetailsPage() {
           />
 
           <Section title={`Comments${comments.length ? ` (${comments.length})` : ""}`}>
-            <form onSubmit={(e) => { e.preventDefault(); handleAddComment() }} className="flex flex-col gap-3 sm:flex-row">
-              <input
-                aria-label="Write a comment"
-                placeholder="Ask a question or share a thought"
-                value={commentInput}
-                onChange={(e) => setCommentInput(e.target.value)}
-                className="h-11 w-full shrink-0 sm:w-auto sm:flex-1 rounded-full border border-input bg-transparent px-5 text-base text-foreground placeholder:text-muted-foreground focus:border-muted-foreground focus:outline-none"
-              />
-              <button type="submit" disabled={!commentInput.trim()} className={pillClass}>Post</button>
-            </form>
+            <CommentForm onPost={postComment} />
             {comments.length === 0 ? (
               <p className="mt-6 text-[15px] text-muted-foreground">No comments yet.</p>
             ) : (
@@ -355,5 +359,30 @@ export default function IdeaDetailsPage() {
         />
       )}
     </Page>
+  )
+}
+
+/** The comment box, with its own text: typing doesn't re-render the whole idea page. */
+function CommentForm({ onPost }: { onPost: (text: string) => Promise<boolean> }) {
+  const [text, setText] = useState("")
+
+  const submit = async () => {
+    const t = text.trim()
+    if (!t) return
+    setText("")
+    if (!(await onPost(t))) setText(t)
+  }
+
+  return (
+    <form onSubmit={(e) => { e.preventDefault(); submit() }} className="flex flex-col gap-3 sm:flex-row">
+      <input
+        aria-label="Write a comment"
+        placeholder="Ask a question or share a thought"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        className="h-11 w-full shrink-0 sm:w-auto sm:flex-1 rounded-full border border-input bg-transparent px-5 text-base text-foreground placeholder:text-muted-foreground focus:border-muted-foreground focus:outline-none"
+      />
+      <button type="submit" disabled={!text.trim()} className={pillClass}>Post</button>
+    </form>
   )
 }

@@ -19,6 +19,7 @@ from datetime import datetime, timedelta, timezone
 
 from langgraph.types import Command
 from pymongo import ReturnDocument
+from pymongo.errors import DuplicateKeyError
 
 from app.core import db
 from app.core.errors import AgentError, NotFound
@@ -41,36 +42,60 @@ class RunManager:
     def __init__(self) -> None:
         self.graphs: dict[str, object] = {}
         self.finishers: dict[str, Callable[[dict, dict], Awaitable[None]]] = {}
+        self.durability: dict[str, str] = {}
         self.tasks: dict[str, asyncio.Task] = {}
         self.subs: dict[str, set[asyncio.Queue]] = defaultdict(set)
         # Runs this process stops without ending them (shutdown, or another instance took over):
         # their status stays as it is, so they are driven again from the checkpoint.
         self._released: set[str] = set()
         self._emit_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
+        self._seqs: dict[str, int] = {}  # each run's last event number, while it's driven here
         self._recovery: asyncio.Task | None = None
 
-    def register(self, kind: str, graph, on_finish: Callable[[dict, dict], Awaitable[None]] | None = None) -> None:
-        """`on_finish(run, final_state_values)` runs after the graph ends (complete or failed), not on interrupts."""
+    def register(self, kind: str, graph, on_finish: Callable[[dict, dict], Awaitable[None]] | None = None,
+                 durability: str | None = None) -> None:
+        """`on_finish(run, final_state_values)` runs after the graph ends (complete or failed), not on interrupts.
+        `durability="exit"` checkpoints only when the run ends or pauses (a short graph with an
+        idempotent commit: ~25 checkpoint writes become ~4). Its input is kept on the run, so a run
+        that dies before its first checkpoint starts over instead of failing."""
         self.graphs[kind] = graph
         if on_finish:
             self.finishers[kind] = on_finish
+        if durability:
+            self.durability[kind] = durability
 
     # ---- events -------------------------------------------------------------------------
     async def emit(self, run_id: str, user_id: str | None, type_: str, data: dict, idea_id: str | None = None) -> int:
         # One emit at a time per run (parallel nodes emit together): numbering, storing and
         # delivering in one step keeps events in seq order, so a subscriber never skips one.
+        # The number is kept here (only the driving instance emits) and the unique (run_id, seq)
+        # index guards it: one insert per event instead of a counter update plus an insert.
         async with self._emit_locks[run_id]:
-            run = await db.col("agent_runs").find_one_and_update(
-                {"_id": run_id}, {"$inc": {"seq": 1}, "$set": {"heartbeat_at": _now()}},
-                projection={"seq": 1}, return_document=ReturnDocument.AFTER,
-            )
-            if not run:
-                raise NotFound(f"run {run_id}")
-            ev = {"run_id": run_id, "user_id": user_id, "idea_id": idea_id, "seq": run["seq"], "type": type_, "data": data, "at": _now()}
-            await db.col("agent_run_events").insert_one(dict(ev))
+            for attempt in range(3):
+                seq = await self._next_seq(run_id)
+                ev = {"run_id": run_id, "user_id": user_id, "idea_id": idea_id, "seq": seq, "type": type_, "data": data, "at": _now()}
+                try:
+                    await db.col("agent_run_events").insert_one(dict(ev))
+                    break
+                except DuplicateKeyError:
+                    self._seqs.pop(run_id, None)  # someone else numbered events for it: re-read
+                    if attempt == 2:
+                        raise
             for q in list(self.subs.get(run_id, ())):
                 q.put_nowait(ev)
             return ev["seq"]
+
+    async def _next_seq(self, run_id: str) -> int:
+        if run_id not in self._seqs:
+            last = await db.col("agent_run_events").find_one({"run_id": run_id}, {"seq": 1}, sort=[("seq", -1)])
+            self._seqs[run_id] = int((last or {}).get("seq") or 0)
+        self._seqs[run_id] += 1
+        return self._seqs[run_id]
+
+    async def last_seq(self, run_id: str) -> int:
+        """The newest event's number (0 when there are none, or they expired)."""
+        last = await db.col("agent_run_events").find_one({"run_id": run_id}, {"seq": 1}, sort=[("seq", -1)])
+        return int((last or {}).get("seq") or 0)
 
     async def subscribe(self, run_id: str, after: int = 0, ping_every: float = 15.0) -> AsyncIterator[dict]:
         """Stored events after `after`, then live ones. Ends after a terminal event."""
@@ -88,13 +113,18 @@ class RunManager:
                     ev = await asyncio.wait_for(q.get(), timeout=2.0)
                     batch = [ev]
                 except TimeoutError:
-                    batch = [e async for e in db.col("agent_run_events").find({"run_id": run_id, "seq": {"$gt": last}}).sort("seq", 1)]
+                    # Driven here: every event reaches the queue, so there's nothing to poll for.
+                    # Driven elsewhere (another instance), Mongo is the only way to see them.
+                    driven_here = run_id in self.tasks
+                    batch = [] if driven_here else [
+                        e async for e in db.col("agent_run_events").find({"run_id": run_id, "seq": {"$gt": last}}).sort("seq", 1)]
                     if not batch:
                         # Nothing new and the run isn't going anywhere (finished, waiting, stopped,
                         # deleted): end the stream instead of polling forever.
-                        run = await db.col("agent_runs").find_one({"_id": run_id}, {"status": 1})
-                        if not run or run["status"] not in ACTIVE:
-                            return
+                        if not driven_here:
+                            run = await db.col("agent_runs").find_one({"_id": run_id}, {"status": 1})
+                            if not run or run["status"] not in ACTIVE:
+                                return
                         idle += 2.0
                         if idle >= ping_every:
                             idle = 0.0
@@ -119,8 +149,10 @@ class RunManager:
         run_id = run_id or uuid.uuid4().hex
         run = {
             "_id": run_id, "thread_id": thread_id, "kind": kind, "user_id": user_id, "idea_id": idea_id,
-            "status": "queued", "seq": 0, "owner": INSTANCE, "heartbeat_at": _now(), "started_at": _now(),
+            "status": "queued", "owner": INSTANCE, "heartbeat_at": _now(), "started_at": _now(),
             "finished_at": None, "error": None, **(meta or {}),
+            # Kept only where checkpoints are written at the end (see register): the restart point.
+            **({"input": input} if self.durability.get(kind) == "exit" else {}),
         }
         await db.col("agent_runs").insert_one(run)
         self._spawn(run, input)
@@ -225,9 +257,15 @@ class RunManager:
         runs = db.col("agent_runs")
         await runs.update_one({"_id": run_id}, {"$set": {"status": "running", "heartbeat_at": _now()}})
         beat = asyncio.create_task(self._heartbeat(run_id, asyncio.current_task()), name=f"beat:{run_id}")
+        durability = self.durability.get(run["kind"])
         try:
-            async for _update in graph.astream(payload, config, stream_mode="updates"):
-                await runs.update_one({"_id": run_id}, {"$set": {"heartbeat_at": _now()}})
+            if payload is None and durability == "exit" and run.get("input") is not None:
+                # Recovered: without a checkpoint (it died before ending or pausing), start over.
+                if not (await graph.aget_state(config)).values:
+                    payload = run["input"]
+            # Liveness is the heartbeat task's job (every HEARTBEAT s), not a write per graph step.
+            async for _update in graph.astream(payload, config, stream_mode="updates", durability=durability):
+                pass
             state = await graph.aget_state(config)
             if state.interrupts:
                 await runs.update_one({"_id": run_id}, {"$set": {"status": "interrupted"}})
@@ -265,6 +303,8 @@ class RunManager:
             await emit("error", public)
         finally:
             beat.cancel()
+            self._seqs.pop(run_id, None)
+            self._emit_locks.pop(run_id, None)
 
     async def _heartbeat(self, run_id: str, driver: asyncio.Task | None) -> None:
         """Proves this instance still drives the run. If another instance took it over (this one

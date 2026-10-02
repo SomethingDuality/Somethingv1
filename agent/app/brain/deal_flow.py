@@ -28,6 +28,7 @@ NEED = {
     "Founder": "Add your skills, and ideas looking for someone like you arrive every week.",
 }
 ACTIONS = {"opened", "saved", "passed", "asked"}
+UNREADY_RECHECK = timedelta(hours=1)
 
 
 def _now() -> datetime:
@@ -68,7 +69,9 @@ async def _build_batch(user_id: str, reason: str) -> dict:
     if last and last.get("ready") and last["created_at"] > _now() - timedelta(days=s.match_cadence_days):
         return last
     if last and not last.get("ready") and not person["ready"]:
-        return last  # still nothing to match on: don't pile up empty batches
+        # Still nothing to match on: don't pile up empty batches; note that it was checked.
+        await db.col("agent_match_batches").update_one({"_id": last["_id"]}, {"$set": {"stale": False, "checked_at": _now()}})
+        return {**last, "stale": False}
     batch_id = uuid.uuid4().hex
     matches = []
     if person["ready"]:
@@ -117,7 +120,11 @@ async def current(user_id: str, role: str) -> dict:
     if role not in ("Investor", "Founder"):
         raise InvalidInput("role")
     batch = await db.col("agent_match_batches").find_one({"user_id": user_id}, sort=[("created_at", -1)])
-    if not batch or not batch.get("ready"):
+    # Not ready yet: look again when the profile changed (a profile.updated event marks it stale)
+    # or an hour on, not on every visit (each look is a Node call and up to a second).
+    recheck = not batch or (not batch.get("ready") and (
+        batch.get("stale") or (batch.get("checked_at") or batch["created_at"]) < _now() - UNREADY_RECHECK))
+    if recheck:
         batch = await build_batch(user_id, reason="first")
     matches = [m async for m in db.col("agent_matches").find({"batch_id": batch["_id"]}).sort("rank", 1)]
     next_at = batch["created_at"] + timedelta(days=get_settings().match_cadence_days)

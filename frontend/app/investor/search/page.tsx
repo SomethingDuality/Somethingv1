@@ -2,10 +2,11 @@
 
 import type React from "react"
 
-import { useEffect, useMemo, useRef, useState, useCallback } from "react"
+import { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react"
 import { useSearchParams } from "next/navigation"
 
 import apiClient from "@/lib/axios"
+import { cached, cachedGet } from "@/lib/api-cache"
 import { apiError, cn } from "@/lib/utils"
 import { Page, PageTitle, countOf, pillClass, quietLinkClass } from "@/components/shell/page"
 import { toast } from "@/components/ui/use-toast"
@@ -41,11 +42,13 @@ type Project = {
   milestones: { status: "open" | "done" }[]
   supporters: number
   supportedByMe: boolean
+  /** What the search box matches, lower-cased once here rather than on every keystroke. */
+  search: string
 }
 
 // Shape a raw Idea doc from /ideas/discover into our Project type
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const normalizeIdea = (raw: any): Project => ({
+const normalizeIdea = (raw: any): Project => withSearch({
   id:               raw._id ?? raw.id,
   name:             raw.title ?? "Untitled",
   author:           raw.author ?? "",
@@ -61,6 +64,11 @@ const normalizeIdea = (raw: any): Project => ({
   supporters:       raw.likes ?? 0,
   supportedByMe:    Boolean(raw.supportedByMe),
 })
+type RawIdea = Parameters<typeof normalizeIdea>[0]
+
+function withSearch(p: Omit<Project, "search">): Project {
+  return { ...p, search: `${p.name} ${p.author} ${p.desc} ${p.domains.map((d) => labelFor("sectors", d)).join(" ")} ${p.location}`.toLowerCase() }
+}
 
 // Ids from shared/taxonomy.json; idea tags are normalized to the same ids. Location comes from the
 // founder's profile, matched to a known place by the API ("other" when it isn't one).
@@ -72,19 +80,18 @@ const locationLabel = (id: string) => (id === "other" ? "Elsewhere" : labelFor("
 type WhenKey = "any" | "30d" | "90d" | "1y"
 
 export default function InvestorSearchPage() {
-  const [projects, setProjects]   = useState<Project[]>([])
-  const [loadingProjects, setLoadingProjects] = useState(true)
+  // What this tab already has paints at once (lib/api-cache); fetchProjects checks it.
+  const [projects, setProjects]   = useState<Project[]>(() => cached<RawIdea[]>("/ideas/discover")?.map(normalizeIdea) ?? [])
+  const [loadingProjects, setLoadingProjects] = useState(() => !cached("/ideas/discover"))
   const [loadError, setLoadError] = useState<string | null>(null)
   const { on: ghostMode } = useGhostMode()
 
   // Fetch ideas from the real API on mount
   const fetchProjects = useCallback(async () => {
-    setLoadingProjects(true)
+    if (!cached("/ideas/discover")) setLoadingProjects(true)
     setLoadError(null)
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const res = await apiClient.get<any[]>("/ideas/discover")
-      setProjects(res.data.map(normalizeIdea))
+      await cachedGet<RawIdea[]>("/ideas/discover", (data) => setProjects(data.map(normalizeIdea)))
     } catch (err) {
       setLoadError(apiError(err, "Couldn't load ideas."))
     } finally {
@@ -99,7 +106,9 @@ export default function InvestorSearchPage() {
 
   // Saved ideas live on the server (the investor's pipeline starts here). Ideas saved in this
   // browser before that are copied up once, then the browser copy is removed.
-  const [watchlistedIds, setWatchlistedIds] = useState<string[]>([])
+  const [savedIds, setSavedIds] = useState<Set<string>>(() => new Set(cached<{ ids: string[] }>("/investor/watchlist")?.ids))
+  const savedRef = useRef(savedIds)
+  savedRef.current = savedIds
 
   useEffect(() => {
     const LEGACY_KEY = "investor_watchlisted_ids"
@@ -110,26 +119,33 @@ export default function InvestorSearchPage() {
         await Promise.allSettled(legacy.map((id) => apiClient.post(`/investor/watchlist/${id}`, {})))
         try { localStorage.removeItem(LEGACY_KEY) } catch { /* private mode */ }
       }
-      const res = await apiClient.get<{ ids: string[] }>("/investor/watchlist")
-      setWatchlistedIds(res.data.ids)
+      await cachedGet<{ ids: string[] }>("/investor/watchlist", (w) => setSavedIds(new Set(w.ids)))
     }
-    load().catch(() => setWatchlistedIds([]))
+    load().catch(() => setSavedIds(new Set()))
   }, [])
 
-  const toggleWatchlist = async (id: string) => {
-    const saved = watchlistedIds.includes(id)
-    setWatchlistedIds((ids) => (saved ? ids.filter((x) => x !== id) : [...ids, id]))
+  // Stable (it reads the saved ids through a ref), so the memoized cards don't re-render for it.
+  const toggleWatchlist = useCallback(async (id: string) => {
+    const saved = savedRef.current.has(id)
+    const mark = (on: boolean) => setSavedIds((cur) => {
+      const next = new Set(cur)
+      if (on) next.add(id)
+      else next.delete(id)
+      return next
+    })
+    mark(!saved)
     try {
       if (saved) await apiClient.delete(`/investor/watchlist/${id}`)
       else await apiClient.post(`/investor/watchlist/${id}`, {})
     } catch (err) {
-      setWatchlistedIds((ids) => (saved ? [...ids, id] : ids.filter((x) => x !== id)))
+      mark(saved)
       toast({ title: saved ? "Not removed" : "Not saved", description: apiError(err, "Please try again."), variant: "destructive" })
     }
-  }
+  }, [])
 
-  // Top search
+  // Top search. The list filters on a deferred copy, so typing stays quick on a long list.
   const [q, setQ] = useState("")
+  const query = useDeferredValue(q)
 
   // Filters in sheet
   const [open, setOpen] = useState(false)
@@ -151,12 +167,13 @@ export default function InvestorSearchPage() {
   const prefillFromProfile = useCallback(async () => {
     if (domainsTouched.current) return
     try {
-      const res = await apiClient.get<{ interests?: string[] }>("/investor/profile")
-      const sectors = normalizeList("sectors", res.data.interests ?? [])
-      if (!domainsTouched.current && sectors.length) {
-        setSelectedDomainsState(sectors)
-        setDomainsFromProfile(true)
-      }
+      await cachedGet<{ interests?: string[] }>("/investor/profile", (profile) => {
+        const sectors = normalizeList("sectors", profile.interests ?? [])
+        if (!domainsTouched.current && sectors.length) {
+          setSelectedDomainsState(sectors)
+          setDomainsFromProfile(true)
+        }
+      })
     } catch {
       // no prefill; the search still works
     }
@@ -189,12 +206,9 @@ export default function InvestorSearchPage() {
   // Results — filter the API-sourced projects
   const { results, hiddenUntagged } = useMemo(() => {
     let hiddenUntagged = 0
+    const s = query.trim().toLowerCase()
     const results = projects.filter((p) => {
-      const s = q.trim().toLowerCase()
-      if (s) {
-        const hay = `${p.name} ${p.author} ${p.desc} ${p.domains.map((d) => labelFor("sectors", d)).join(" ")} ${p.location}`.toLowerCase()
-        if (!hay.includes(s)) return false
-      }
+      if (s && !p.search.includes(s)) return false
       if (selectedStages.length > 0 && !selectedStages.includes(p.stage)) return false
       if (selectedRaising.length > 0 && !selectedRaising.includes(p.raising)) return false
       if (selectedLocations.length > 0 && !selectedLocations.includes(p.locationId)) return false
@@ -210,7 +224,7 @@ export default function InvestorSearchPage() {
       return true
     })
     return { results, hiddenUntagged }
-  }, [projects, q, selectedDomains, selectedStages, postedWhen, selectedRaising, selectedLocations, includeUntagged])
+  }, [projects, query, selectedDomains, selectedStages, postedWhen, selectedRaising, selectedLocations, includeUntagged])
 
   // Only places some founder is actually in, most ideas first.
   const locationOptions = useMemo(() => {
@@ -300,45 +314,9 @@ export default function InvestorSearchPage() {
               <p className="text-[15px] text-muted-foreground">No ideas match. Try another search or fewer filters.</p>
             ) : (
               <ul className="grid gap-x-8 gap-y-12 sm:grid-cols-2 2xl:grid-cols-3">
-                {results.map((r) => {
-                  const starred = watchlistedIds.includes(r.id)
-                  return (
-                    <li key={r.id}>
-                      <IdeaCard
-                        href={`/investor/search/${r.id}`}
-                        idea={{
-                          id: r.id,
-                          title: r.name,
-                          description: r.desc,
-                          sectors: r.domains,
-                          stage: r.stage,
-                          raising: r.raising,
-                          author: r.author,
-                          authorAvatar: r.authorAvatar,
-                          location: r.location,
-                          createdAt: r.postedAt,
-                          milestones: r.milestones,
-                        }}
-                        action={
-                          <span className="flex items-center gap-2">
-                            <SupportButton ideaId={r.id} supported={r.supportedByMe} count={r.supporters} size="sm" />
-                            <button
-                              type="button"
-                              onClick={() => toggleWatchlist(r.id)}
-                              aria-pressed={starred}
-                              className={cn(
-                                "rounded-full border px-3 py-1 text-xs transition-colors cursor-pointer",
-                                starred ? "border-gold/40 bg-gold-soft text-gold" : "border-line text-muted-foreground hover:text-foreground",
-                              )}
-                            >
-                              {starred ? "Saved" : "Save"}
-                            </button>
-                          </span>
-                        }
-                      />
-                    </li>
-                  )
-                })}
+                {results.map((r) => (
+                  <ResultCard key={r.id} project={r} saved={savedIds.has(r.id)} onToggleSave={toggleWatchlist} />
+                ))}
               </ul>
             )}
             {!loadingProjects && !loadError && hiddenUntagged > 0 && !includeUntagged && (
@@ -355,6 +333,54 @@ export default function InvestorSearchPage() {
     </Page>
   )
 }
+
+/**
+ * One idea in the results. Memoized: a keystroke in the search or a Save elsewhere re-renders
+ * only the cards whose props changed. Far below the fold, the browser skips laying it out
+ * (content-visibility); the 4px padding offset by a negative margin keeps focus rings unclipped.
+ */
+const ResultCard = memo(function ResultCard({ project: r, saved, onToggleSave }: {
+  project: Project
+  saved: boolean
+  onToggleSave: (id: string) => void
+}) {
+  return (
+    <li className="-m-1 p-1 [content-visibility:auto] [contain-intrinsic-size:auto_440px]">
+      <IdeaCard
+        href={`/investor/search/${r.id}`}
+        idea={{
+          id: r.id,
+          title: r.name,
+          description: r.desc,
+          sectors: r.domains,
+          stage: r.stage,
+          raising: r.raising,
+          author: r.author,
+          authorAvatar: r.authorAvatar,
+          location: r.location,
+          createdAt: r.postedAt,
+          milestones: r.milestones,
+        }}
+        action={
+          <span className="flex items-center gap-2">
+            <SupportButton ideaId={r.id} supported={r.supportedByMe} count={r.supporters} size="sm" />
+            <button
+              type="button"
+              onClick={() => onToggleSave(r.id)}
+              aria-pressed={saved}
+              className={cn(
+                "rounded-full border px-3 py-1 text-xs transition-colors cursor-pointer",
+                saved ? "border-gold/40 bg-gold-soft text-gold" : "border-line text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {saved ? "Saved" : "Save"}
+            </button>
+          </span>
+        }
+      />
+    </li>
+  )
+})
 
 /* Filters sheet component */
 type FacetState = {

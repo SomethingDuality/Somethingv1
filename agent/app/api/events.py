@@ -28,6 +28,9 @@ async def receive(event: EventIn, _caller: Caller = Depends(service)):
     idea_id = payload.get("ideaId")
     if payload.get("source") == "agent":
         return {"status": "ignored"}  # our own writes coming back: loop guard
+    if event.eventType == "profile.updated" and user_id:
+        # Their deal flow waits for a usable profile: look again on the next visit.
+        await db.col("agent_match_batches").update_many({"user_id": user_id, "ready": False}, {"$set": {"stale": True}})
     try:
         await db.col("agent_events").insert_one({
             "_id": event.eventId, "eventType": event.eventType, "user_id": user_id, "idea_id": idea_id,

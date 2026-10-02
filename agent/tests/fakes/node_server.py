@@ -16,6 +16,7 @@ class FakeNode:
         self.fail_next: int = 0
         self.public_ideas: list[dict] = []    # /internal/match/ideas
         self.match_people: dict[str, dict] = {}  # /internal/match/user/:id
+        self.requests: list[str] = []           # every path asked, in order (tests count calls)
 
     def add_user(self, user_id: str, role: str = "Founder", **fields) -> None:
         self.users[user_id] = {"_id": user_id, "role": role, "fields": dict(fields), "fieldSources": {}}
@@ -34,6 +35,7 @@ class FakeNode:
             self.fail_next -= 1
             return httpx.Response(503, json={"message": "down"})
         path = req.url.path
+        self.requests.append(path)
         body = json.loads(req.content) if req.content else {}
         if req.method == "GET" and path.startswith("/internal/context/"):
             user_id = path.rsplit("/", 1)[1]

@@ -39,7 +39,7 @@ async def turn(user_id: str, tz: str | None, text: str, *, review_id: str | None
     # The idea is never taken on the request's word: memory scopes are per idea, so a founder who
     # named someone else's idea would read and write that idea's memory.
     if review_id:
-        review = await db.col("agent_reviews").find_one({"_id": review_id, "user_id": user_id}, {"idea_id": 1})
+        review = await db.col("agent_reviews").find_one({"_id": review_id, "user_id": user_id}, {"idea_id": 1, "view": 1})
         if not review:
             raise NotFound("review")
         if idea_id and idea_id != review.get("idea_id"):
@@ -56,6 +56,7 @@ async def turn(user_id: str, tz: str | None, text: str, *, review_id: str | None
     try:
         out = await chat_graph.ainvoke(
             {"user_id": user_id, "text": text, "review_id": review_id, "idea_id": idea_id,
+             **({"review_view": review.get("view") or {}} if review_id else {}),
              "history": [{"role": m["role"], "text": m["text"]} for m in past[-8:]]},
             config={"configurable": {"user_id": user_id}},
         )

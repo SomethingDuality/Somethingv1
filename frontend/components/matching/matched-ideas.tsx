@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react"
 import Link from "next/link"
 import apiClient from "@/lib/axios"
+import { cached, cachedGet } from "@/lib/api-cache"
 import { Section } from "@/components/shell/page"
 import { SkeletonRows } from "@/components/visual/skeleton"
 import { dealFlowApi, type DealFlow, type DealFlowMatch } from "@/lib/agent-transport"
@@ -24,12 +25,13 @@ const inSentence = (label: string) => {
 const day = (iso: string) => new Date(iso).toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })
 
 export function MatchedIdeas({ role }: { role: "investor" | "founder" }) {
-  const [flow, setFlow] = useState<DealFlow | null | undefined>(undefined)
+  // Matching takes the agent a while: what this tab already has shows at once (lib/api-cache).
+  const [flow, setFlow] = useState<DealFlow | null | undefined>(() => cached<DealFlow>("/agent/deal-flow"))
   const [hidden, setHidden] = useState<Set<string>>(new Set())
   const [saved, setSaved] = useState<Set<string>>(new Set())
 
   useEffect(() => {
-    dealFlowApi.get().then(setFlow).catch(() => setFlow(null))
+    cachedGet<DealFlow>("/agent/deal-flow", setFlow).catch(() => setFlow(null))
   }, [])
 
   if (flow === null) return null
@@ -115,12 +117,17 @@ export function MatchedIdeas({ role }: { role: "investor" | "founder" }) {
   )
 }
 
-/** On a founder's own idea: how many people it was matched to lately. Counts only, never who. */
-export function IdeaReach({ ideaId }: { ideaId: string }) {
-  const [reach, setReach] = useState<{ investors: number; founders: number } | null>(null)
+type Reach = { investors: number; founders: number }
+
+/**
+ * On a founder's own idea: how many people it was matched to lately. Counts only, never who.
+ * `request` is the page's own call for it, started alongside the idea; without one it asks itself.
+ */
+export function IdeaReach({ ideaId, request }: { ideaId: string; request?: Promise<Reach> }) {
+  const [reach, setReach] = useState<Reach | null>(null)
   useEffect(() => {
-    dealFlowApi.reach(ideaId).then(setReach).catch(() => setReach(null))
-  }, [ideaId])
+    ;(request ?? dealFlowApi.reach(ideaId)).then(setReach).catch(() => setReach(null))
+  }, [ideaId, request])
   if (!reach) return null
   const parts = [
     reach.investors ? `${reach.investors} ${reach.investors === 1 ? "investor" : "investors"}` : null,

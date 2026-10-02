@@ -1,21 +1,28 @@
 "use client"
 
 import { useEffect, useState } from "react"
+import dynamic from "next/dynamic"
 import Link from "next/link"
-import { usePathname, useRouter } from "next/navigation"
+import { usePathname } from "next/navigation"
 import { useAuth } from "@/components/auth-provider"
-import { NotificationsDropdown } from "@/components/notifications-dropdown"
-import { InboxProvider, useInbox } from "@/components/community/inbox-provider"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
+import { InboxProvider, useInbox, useNotifications } from "@/components/community/inbox-provider"
+import { accountRowClass, notificationsRowClass } from "@/components/shell/menu-rows"
+import { Wordmark, useInteriorTheme } from "@/components/shell/wordmark"
 import { cn } from "@/lib/utils"
-import { Creature } from "@/components/creature/creature"
-import { useGhostMode } from "@/hooks/use-ghost-mode"
+
+// Kept here for the pages that imported them from the shell.
+export { Wordmark, useInteriorTheme }
+
+// The two menus (Radix popover and dropdown, Ghost Mode, the notifications list) load after the
+// page. Until they arrive a look-alike row holds each one's place, so nothing moves.
+const NotificationsDropdown = dynamic(
+  () => import("@/components/notifications-dropdown").then((m) => m.NotificationsDropdown),
+  { ssr: false, loading: () => <NotificationsRow /> },
+)
+const AccountMenu = dynamic(() => import("@/components/shell/account-menu").then((m) => m.AccountMenu), {
+  ssr: false,
+  loading: () => <AccountRow />,
+})
 
 export type NavItem = { label: string; href: string }
 
@@ -123,64 +130,25 @@ function Shell({ role, nav, children }: Props) {
   )
 }
 
-/** Switches <html> to the interior theme while the calling page is mounted (the landing keeps its own). */
-export function useInteriorTheme() {
-  useEffect(() => {
-    const root = document.documentElement
-    root.classList.add("interior")
-    return () => root.classList.remove("interior")
-  }, [])
-}
-
-export function Wordmark({ href }: { href: string }) {
+function NotificationsRow() {
+  const { items } = useNotifications()
+  const unread = (items ?? []).filter((n) => !n.read).length
   return (
-    <Link
-      href={href}
-      className="flex items-center gap-2 text-[22px] font-bold leading-none text-foreground"
-      style={{ fontFamily: "var(--font-outfit, sans-serif)", letterSpacing: "-0.05em" }}
-    >
-      {/* The same mascot + name as the landing's nav, drawn as the vector creature. */}
-      <Creature size={22} holding />
-      something
-    </Link>
+    <button type="button" className={notificationsRowClass}>
+      <span>Notifications</span>
+      {unread > 0 && <span className="text-foreground tabular-nums" aria-label={`${unread} unread`}>{unread}</span>}
+    </button>
   )
 }
 
-function AccountMenu({ role }: { role: "founder" | "investor" }) {
-  const { user, logout } = useAuth()
-  const router = useRouter()
-  const ghostMode = useGhostMode()
-  const ghost = role === "investor" && ghostMode.on
-
+function AccountRow() {
+  const { user } = useAuth()
+  // The shell only renders for the signed-in role, so the user's role is the shell's.
+  const ghost = user?.role?.toLowerCase() === "investor" && user.ghostMode !== false
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger className="w-full py-1.5 text-left text-[15px] text-muted-foreground hover:text-foreground transition-colors cursor-pointer outline-none">
-        <span className="block truncate text-foreground">{user?.name || "Account"}</span>
-        {role === "investor" && ghost && <span className="block text-xs text-muted-foreground">Ghost Mode on</span>}
-      </DropdownMenuTrigger>
-      <DropdownMenuContent side="top" align="start" className="w-56 bg-popover border-border rounded-xl p-1">
-        {user?.email && <p className="px-3 py-2 text-xs text-muted-foreground truncate">{user.email}</p>}
-        <DropdownMenuItem onClick={() => router.push(`/${role}/profile`)} className="px-3 py-2 text-sm cursor-pointer rounded-lg">
-          Profile
-        </DropdownMenuItem>
-        <DropdownMenuItem onClick={() => router.push(`/${role}/settings`)} className="px-3 py-2 text-sm cursor-pointer rounded-lg">
-          Settings
-        </DropdownMenuItem>
-        {user?.isAdmin && (
-          <DropdownMenuItem onClick={() => router.push("/admin")} className="px-3 py-2 text-sm cursor-pointer rounded-lg">
-            Admin
-          </DropdownMenuItem>
-        )}
-        {role === "investor" && (
-          <DropdownMenuItem onClick={() => ghostMode.set(!ghostMode.on)} disabled={ghostMode.saving} className="px-3 py-2 text-sm cursor-pointer rounded-lg">
-            {ghost ? "Turn Ghost Mode off" : "Turn Ghost Mode on"}
-          </DropdownMenuItem>
-        )}
-        <DropdownMenuSeparator className="bg-border" />
-        <DropdownMenuItem onClick={() => logout()} className="px-3 py-2 text-sm cursor-pointer rounded-lg text-destructive focus:text-destructive">
-          Sign out
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <button type="button" className={accountRowClass}>
+      <span className="block truncate text-foreground">{user?.name || "Account"}</span>
+      {ghost && <span className="block text-xs text-muted-foreground">Ghost Mode on</span>}
+    </button>
   )
 }

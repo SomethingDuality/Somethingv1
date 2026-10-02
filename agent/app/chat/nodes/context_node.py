@@ -13,8 +13,11 @@ from app.utils.ctx import llm_ctx
 async def context_node(state: ChatState, config: RunnableConfig) -> dict:
     ctx = {"idea_line": "", "verdict": "none yet", "risks": [], "strengths": [], "facts": []}
     if state.get("review_id"):
-        doc = await db.col("agent_reviews").find_one({"_id": state["review_id"], "user_id": state["user_id"]}, {"view": 1})
-        view = (doc or {}).get("view") or {}
+        if "review_view" in state:
+            view = state["review_view"]
+        else:
+            doc = await db.col("agent_reviews").find_one({"_id": state["review_id"], "user_id": state["user_id"]}, {"view": 1})
+            view = (doc or {}).get("view") or {}
         ctx["idea_line"] = ((view.get("brief") or {}).get("oneLiner")) or ""
         nothing = view.get("nothing") or {}
         if nothing:

@@ -1,6 +1,12 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+/* Files no page imports (kept until someone decides to delete them). Tailwind scans every file,
+   so their classes would otherwise ship in every page's CSS. */
+@source not "../components/ui/{accordion,alert,avatar,badge,breadcrumb,breadcrumb copy,calendar,card,carousel,collapsible,drawer,form,input,label,pagination,progress,select,separator,sidebar,skeleton,table,textarea,tooltip,use-mobile}.tsx";
+@source not "../components/hud.tsx";
+@source not "../lib/mock-mutiny.ts";
+
 @custom-variant dark (&:is(.dark *));
 
 :root {

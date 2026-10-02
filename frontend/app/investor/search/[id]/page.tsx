@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
 import { useParams } from "next/navigation"
 import apiClient, { assetUrl, isUploadPath, openUpload } from "@/lib/axios"
+import { cachedGet } from "@/lib/api-cache"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { apiError, cn } from "@/lib/utils"
 import { Aside, Main, Page, PageTitle, Section, Split, pillClass, quietLinkClass, usd } from "@/components/shell/page"
@@ -12,7 +13,7 @@ import { fileKind } from "@/lib/files"
 import { IdeaCover } from "@/components/visual/idea-cover"
 import { IdeaFacts } from "@/components/visual/idea-facts"
 import { MoneyPanel } from "@/components/visual/money-panel"
-import { IdeaUpdates } from "@/components/idea-updates"
+import { IdeaUpdates, fetchUpdates, type Update } from "@/components/idea-updates"
 import { IdeaMilestones, toMilestone, type Milestone } from "@/components/idea-milestones"
 import { ReleaseDialog, type ReleaseTarget } from "@/components/release-dialog"
 import { toast } from "@/components/ui/use-toast"
@@ -68,11 +69,16 @@ export default function ProjectBriefPage() {
   }, [id])
 
   const [loadError, setLoadError] = useState<string | null>(null)
+  // The updates are asked for with the idea (the id is in the URL) and handed to IdeaUpdates.
+  const [updatesRequest, setUpdatesRequest] = useState<Promise<Update[]>>()
 
   useEffect(() => {
     if (!id) return
     setIsLoadingProject(true)
     setLoadError(null)
+    const updates = fetchUpdates(id)
+    updates.catch(() => {}) // IdeaUpdates reads it; until then a failure isn't "unhandled"
+    setUpdatesRequest(updates)
 
     const fetchProject = async () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -113,15 +119,13 @@ export default function ProjectBriefPage() {
   }, [id])
 
   // This investor's own commitment to the idea (for "Committed $X" and milestone releases).
-  const loadMine = useCallback(() => {
-    apiClient
-      .get<{ data: Array<Mine & { ideaId: string }> }>("/investor/portfolio")
-      .then((res) => {
-        const row = res.data.data.find((r) => String(r.ideaId) === id) ?? null
-        setMine(row)
-        setMyCommit(row?.committed ?? null)
-      })
-      .catch(() => { setMine(null); setMyCommit(null) })
+  // `fresh` after a commit or release: the cached portfolio is from before it.
+  const loadMine = useCallback((fresh = false) => {
+    cachedGet<{ data: Array<Mine & { ideaId: string }> }>("/investor/portfolio", (portfolio) => {
+      const row = portfolio.data.find((r) => String(r.ideaId) === id) ?? null
+      setMine(row)
+      setMyCommit(row?.committed ?? null)
+    }, { fresh }).catch(() => { setMine(null); setMyCommit(null) })
   }, [id])
 
   const askForUpdate = async () => {
@@ -152,10 +156,9 @@ export default function ProjectBriefPage() {
     // Already committed? Show that instead of offering a second commit.
     loadMine()
     // Prefill the amount only from a minimum check the investor actually set (not the $5k default).
-    apiClient
-      .get<{ minCheck?: number; knownFields?: string[] }>("/investor/profile")
-      .then((res) => setKnownMinCheck(res.data.knownFields?.includes("minCheck") && res.data.minCheck ? res.data.minCheck : null))
-      .catch(() => setKnownMinCheck(null))
+    cachedGet<{ minCheck?: number; knownFields?: string[] }>("/investor/profile", (profile) =>
+      setKnownMinCheck(profile.knownFields?.includes("minCheck") && profile.minCheck ? profile.minCheck : null),
+    ).catch(() => setKnownMinCheck(null))
   }, [id, loadMine])
 
   // Every hook must run before the early returns below (React rules of hooks).
@@ -194,7 +197,7 @@ export default function ProjectBriefPage() {
       setMyCommit(amountNumber)
       // The total under the actions now includes this commitment.
       setP((cur) => (cur ? { ...cur, commitments: { ...cur.commitments, count: cur.commitments.count + 1, total: cur.commitments.total + amountNumber } } : cur))
-      loadMine()
+      loadMine(true)
       setCommitOpen(false)
       toast({ title: "Commitment recorded", description: `$${amountNumber.toLocaleString()} to ${p.name}. No money has moved.` })
     } catch (err) {
@@ -245,7 +248,7 @@ export default function ProjectBriefPage() {
             <p className="mt-8 max-w-[62ch] whitespace-pre-line text-lg leading-relaxed text-foreground/90">{p.desc}</p>
           </div>
 
-          <IdeaUpdates ideaId={p.id} isOwner={false} />
+          <IdeaUpdates ideaId={p.id} isOwner={false} request={updatesRequest} />
 
           <IdeaMilestones
             ideaId={p.id}
@@ -356,7 +359,7 @@ export default function ProjectBriefPage() {
         </Aside>
       </Split>
 
-      <ReleaseDialog target={releasing} onClose={() => setReleasing(null)} onDone={() => { setReleasing(null); loadMine() }} />
+      <ReleaseDialog target={releasing} onClose={() => setReleasing(null)} onDone={() => { setReleasing(null); loadMine(true) }} />
 
       {/* Commit dialog */}
       <Dialog open={commitOpen} onOpenChange={(o) => !commitSaving && setCommitOpen(o)}>

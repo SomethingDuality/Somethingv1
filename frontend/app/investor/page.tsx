@@ -3,8 +3,9 @@
 import { useEffect, useMemo, useState } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import apiClient from "@/lib/axios"
+import { cached, cachedGet } from "@/lib/api-cache"
 import { useAuth } from "@/components/auth-provider"
+import { useNotifications } from "@/components/community/inbox-provider"
 import { Aside, Main, Page, PageTitle, Section, Split, countOf, greeting, pillClass, relativeTime, usd } from "@/components/shell/page"
 import { GettingStarted, type Step } from "@/components/shell/getting-started"
 import { IdeaCard } from "@/components/visual/idea-card"
@@ -29,7 +30,6 @@ type Idea = {
   founderLocation?: string
   milestones?: { status: "open" | "done" }[]
 }
-type Notification = { id: string; text: string; timestamp: string; read: boolean }
 type Portfolio = { data: Array<{ ideaId: string }>; totalCommitted: number; totalReleased: number }
 type Profile = { interests?: string[]; totalCapitalPool?: number; knownFields?: string[] }
 
@@ -44,31 +44,34 @@ export default function InvestorHome() {
   const { user } = useAuth()
   const router = useRouter()
   const [q, setQ] = useState("")
-  const [ideas, setIdeas] = useState<Idea[] | null>(null)
-  const [sectors, setSectors] = useState<string[]>([])
-  const [profile, setProfile] = useState<Profile | null>(null)
-  const [savedCount, setSavedCount] = useState<number | null>(null)
-  const [notes, setNotes] = useState<Notification[] | null>(null)
-  const [portfolio, setPortfolio] = useState<Portfolio | null>(null)
+  // Everything below paints from what this tab already has (lib/api-cache), then refreshes.
+  const [ideas, setIdeas] = useState<Idea[] | null>(() => cached<Idea[]>("/ideas/discover") ?? null)
+  const [profile, setProfile] = useState<Profile | null>(() => cached<Profile>("/investor/profile") ?? null)
+  // The profile answered, either way: the sector leaderboard waits for it rather than asking twice.
+  const [profileSettled, setProfileSettled] = useState(() => profile !== null)
+  const [savedCount, setSavedCount] = useState<number | null>(() => cached<{ ids: string[] }>("/investor/watchlist")?.ids.length ?? null)
+  const [portfolio, setPortfolio] = useState<Portfolio | null>(() => cached<Portfolio>("/investor/portfolio") ?? null)
   const [error, setError] = useState<string | null>(null)
+  // The shell's one notifications list (also behind the sidebar's Notifications menu).
+  const notes = useNotifications()
 
   useEffect(() => {
-    apiClient.get<Idea[]>("/ideas/discover").then((r) => setIdeas(r.data)).catch((err) => {
+    cachedGet<Idea[]>("/ideas/discover", setIdeas).catch((err) => {
       setIdeas([])
       setError(apiError(err, "Couldn't load ideas."))
     })
     // Answers from the Something box land on the profile; refresh what depends on it.
-    const loadProfile = () => apiClient
-      .get<Profile>("/investor/profile")
-      .then((r) => { setProfile(r.data); setSectors(normalizeList("sectors", r.data.interests ?? [])) })
-      .catch(() => setSectors([]))
+    const loadProfile = () => cachedGet<Profile>("/investor/profile", setProfile)
+      .catch(() => {}) // no sectors then: every idea counts as in them
+      .finally(() => setProfileSettled(true))
     loadProfile()
     window.addEventListener("profile:updated", loadProfile)
-    apiClient.get<{ ids: string[] }>("/investor/watchlist").then((r) => setSavedCount(r.data.ids.length)).catch(() => setSavedCount(null))
-    apiClient.get<Notification[]>("/notifications").then((r) => setNotes(r.data)).catch(() => setNotes([]))
-    apiClient.get<Portfolio>("/investor/portfolio").then((r) => setPortfolio(r.data)).catch(() => setPortfolio(null))
+    cachedGet<{ ids: string[] }>("/investor/watchlist", (w) => setSavedCount(w.ids.length)).catch(() => setSavedCount(null))
+    cachedGet<Portfolio>("/investor/portfolio", setPortfolio).catch(() => setPortfolio(null))
     return () => window.removeEventListener("profile:updated", loadProfile)
   }, [])
+
+  const sectors = useMemo(() => normalizeList("sectors", profile?.interests ?? []), [profile])
 
   // Ideas in the investor's sectors (all ideas when no sectors are set yet).
   const inSectors = useMemo(() => {
@@ -89,7 +92,7 @@ export default function InvestorHome() {
     ? `This week ${where}`.trim()
     : sectorNames.length ? `Newest ${where}` : "Newest ideas"
 
-  const needsYou = notes?.filter((n) => !n.read) ?? null
+  const needsYou = notes.items ? notes.items.filter((n) => !n.read) : notes.error ? [] : null
   const poolKnown = Boolean(profile?.knownFields?.includes("totalCapitalPool"))
   const committed = portfolio?.totalCommitted ?? 0
   const summary = portfolio && profile ? (
@@ -174,7 +177,7 @@ export default function InvestorHome() {
             )}
           </Section>
 
-          <LeaderboardCard kind="ideas" role="investor" sectors={sectors} title={sectorNames.length ? "Top in your sectors" : "Top ideas"} />
+          <LeaderboardCard kind="ideas" role="investor" sectors={sectors} enabled={profileSettled} title={sectorNames.length ? "Top in your sectors" : "Top ideas"} />
         </Aside>
 
         <Main>

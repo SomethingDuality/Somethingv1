@@ -17,6 +17,7 @@ from app.core.log import log
 from app.core.runs import manager
 from app.core.settings import get_settings
 from app.diagnostics.graph.builder import compile_echo
+from app.models import embeddings
 from app.registry import register_features
 
 
@@ -40,6 +41,7 @@ async def lifespan(app: FastAPI):
         await manager.shutdown()
         await worker.stop()
         await node_client.close()
+        await embeddings.close()
         await db.close()
         checkpointer.close()
 

@@ -1,6 +1,6 @@
 "use client"
 
-import { Wordmark, useInteriorTheme } from "@/components/shell/app-shell"
+import { Wordmark, useInteriorTheme } from "@/components/shell/wordmark"
 
 type Props = {
   title: string

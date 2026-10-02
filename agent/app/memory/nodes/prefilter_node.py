@@ -30,9 +30,8 @@ async def prefilter_node(state: MemoryWriteState) -> dict:
         else:
             cand["value"] = value
 
-    text = norm(cand["text"])
-    for n in await store.current_notes(store.read_keys(state["scope"]), embeddings=False):
-        if norm(n["text"]) == text and n.get("slot_key") == cand.get("slot_key"):
-            await store.cite([n["_id"]])  # the founder said it again: that's a restatement
-            return {"outcome": "noop", "candidate": cand, "flags": [*flags, "exact_duplicate"]}
+    dup = await store.find_duplicate(store.read_keys(state["scope"]), cand["text"], cand.get("slot_key"))
+    if dup:
+        await store.cite([dup["_id"]])  # the founder said it again: that's a restatement
+        return {"outcome": "noop", "candidate": cand, "flags": [*flags, "exact_duplicate"]}
     return {"candidate": cand, "flags": flags}

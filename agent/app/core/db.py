@@ -15,7 +15,8 @@ INDEXES: dict[str, list[IndexModel]] = {
     "agent_notes": [
         IndexModel([("scope_key", ASCENDING), ("status", ASCENDING), ("created_at", DESCENDING)]),
         IndexModel([("scope_key", ASCENDING), ("slot_key", ASCENDING), ("status", ASCENDING)]),
-        IndexModel([("lineage_id", ASCENDING), ("version", DESCENDING)]),
+        # Exact-duplicate check (prefilter): same words, same scope.
+        IndexModel([("scope_key", ASCENDING), ("text_key", ASCENDING), ("status", ASCENDING)], partialFilterExpression={"text_key": {"$type": "string"}}),
         IndexModel([("op_id", ASCENDING)], unique=True, partialFilterExpression={"op_id": {"$type": "string"}}),
         IndexModel([("user_id", ASCENDING)]),
         IndexModel([("idea_id", ASCENDING)], sparse=True),
@@ -37,7 +38,6 @@ INDEXES: dict[str, list[IndexModel]] = {
     "agent_reviews": [
         IndexModel([("user_id", ASCENDING), ("created_at", DESCENDING)]),
         IndexModel([("idea_id", ASCENDING), ("created_at", DESCENDING)], sparse=True),
-        IndexModel([("flagged_for_human", ASCENDING)], sparse=True),
     ],
     "agent_runs": [
         IndexModel([("thread_id", ASCENDING)], unique=True),
@@ -49,11 +49,11 @@ INDEXES: dict[str, list[IndexModel]] = {
     "agent_run_events": [
         IndexModel([("run_id", ASCENDING), ("seq", ASCENDING)], unique=True),
         IndexModel([("user_id", ASCENDING)]),
+        IndexModel([("idea_id", ASCENDING)], sparse=True),  # Node's purge deletes by idea
         IndexModel([("at", ASCENDING)], expireAfterSeconds=7 * DAY),
     ],
     "agent_usage": [
         IndexModel([("user_id", ASCENDING), ("at", DESCENDING)]),
-        IndexModel([("feature", ASCENDING), ("at", DESCENDING)]),
         IndexModel([("at", ASCENDING)], expireAfterSeconds=180 * DAY),
     ],
     "agent_events": [

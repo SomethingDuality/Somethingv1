@@ -12,16 +12,21 @@ type Props = {
 }
 
 export default function RequireAuth({ children, role }: Props) {
-  const { user, loading, unreachable, refreshMe } = useAuth()
+  const { user, loading, checked, unreachable, refreshMe, ensureChecked } = useAuth()
   const router = useRouter()
   const pathname = usePathname()
   const redirected = useRef(false)
 
+  // /auth/me has answered; before that `user` is only the last one this tab confirmed.
+  const confirmed = checked && !loading
   const wrongRole = Boolean(user && role && user.role !== role)
+
+  // A public page may have skipped /auth/me (nobody had signed in on this browser): ask now.
+  useEffect(() => ensureChecked(), [ensureChecked])
 
   useEffect(() => {
     // Only redirect once — prevents the loop caused by repeated re-renders
-    if (loading || redirected.current) return
+    if (!confirmed || redirected.current) return
     if (!user) {
       if (unreachable) return // not signed out, just not reachable: the retry below
       redirected.current = true
@@ -31,7 +36,7 @@ export default function RequireAuth({ children, role }: Props) {
       redirected.current = true
       router.replace(homeFor(user.role))
     }
-  }, [loading, user, wrongRole, unreachable]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [confirmed, user, wrongRole, unreachable]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Reset once the user is valid again (e.g. after logging in from another tab)
   useEffect(() => {
@@ -40,13 +45,13 @@ export default function RequireAuth({ children, role }: Props) {
 
   // Offline or the server failing is not being signed out: say so and try again, don't send them to sign in.
   useEffect(() => {
-    if (loading || user || !unreachable) return
+    if (!confirmed || user || !unreachable) return
     const online = () => { refreshMe() }
     window.addEventListener("online", online)
     return () => window.removeEventListener("online", online)
-  }, [loading, user, unreachable, refreshMe])
+  }, [confirmed, user, unreachable, refreshMe])
 
-  if (!loading && !user && unreachable) {
+  if (confirmed && !user && unreachable) {
     return (
       <div role="alert" className="flex min-h-dvh flex-col items-center justify-center gap-4 p-8 text-center">
         <p className="text-[15px] text-muted-foreground">Couldn&apos;t connect. Check your connection and try again.</p>
@@ -54,7 +59,9 @@ export default function RequireAuth({ children, role }: Props) {
       </div>
     )
   }
-  if (loading || !user || wrongRole) return null
+  // The last user this tab confirmed, with this page's role, gets the page at once; anyone else
+  // waits for /auth/me.
+  if (!user || wrongRole) return null
 
   return <>{children}</>
 }

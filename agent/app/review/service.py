@@ -10,6 +10,7 @@ from app.core.checkpointer import thread_id
 from app.core.errors import InvalidInput, NotFound
 from app.core.runs import manager
 from app.core.settings import get_settings
+from app.review import store
 from app.router.classify import classify
 
 FEATURE = "review"
@@ -37,10 +38,8 @@ async def start(user_id: str, tz: str | None, *, idea_id: str | None, text: str 
             return {"kind": "general", "reply": route["reply"]}
         if len(text) > 2000:
             raise InvalidInput("too long")
-    else:
-        # Theirs, before a use is taken (Node answers 404 for someone else's idea).
-        await node_client.context(user_id, idea_id=idea_id)
-    await quotas.check_budget()
+    # Theirs (Node answers 404 for someone else's idea) and within budget, before a use is taken.
+    await asyncio.gather(node_client.context(user_id, idea_id=idea_id) if idea_id else asyncio.sleep(0), quotas.check_budget())
     quota = await quotas.consume(user_id, FEATURE, get_settings().reviews_per_day, tz)
     review_id = uuid.uuid4().hex
     now = datetime.now(timezone.utc)
@@ -84,6 +83,7 @@ async def remove(review_id: str, user_id: str) -> dict:
     await manager.cancel(review_id)
     run = await db.col("agent_runs").find_one({"_id": review_id}, {"thread_id": 1})
     await db.col("agent_reviews").delete_one({"_id": review_id})
+    store.forget(review_id)
     await db.col("agent_run_events").delete_many({"run_id": review_id})
     await db.col("agent_runs").delete_one({"_id": review_id})
     await db.col("agent_chats").delete_many({"review_id": review_id, "user_id": user_id})
@@ -108,6 +108,7 @@ async def on_finish(run: dict, values: dict) -> None:
         err = values.get("error") or {}
         update.update({"view.status": "failed", "view.error": {k: err.get(k) for k in ("code", "message", "retryable")}})
     await reviews.update_one({"_id": run["_id"]}, {"$set": update})
+    store.forget(run["_id"])
     if failed and (values.get("error") or {}).get("code") not in FOUNDERS_OWN:
         claimed = await reviews.find_one_and_update({"_id": run["_id"], "refunded": {"$ne": True}}, {"$set": {"refunded": True}},
                                                     projection={"quota_day": 1, "user_id": 1})

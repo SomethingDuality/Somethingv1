@@ -45,7 +45,7 @@ async def test_suites_run_on_fake_models(name):
 
 async def test_supersession_suite_passes_on_the_real_decision_code(fake_node):
     import app.memory.fakes  # noqa: F401
-    manager.register("memory_write", compile_memory_write(checkpointer.saver()))
+    manager.register("memory_write", compile_memory_write(checkpointer.saver()), durability="exit")
     report = await suites.supersession(node=fake_node)
     assert report["pass_rate"] == 1.0, report["failures"]
     assert report["op_accuracy"] == 1.0

@@ -6,15 +6,19 @@ import { Section, pillClass, quietLinkClass, relativeTime } from "@/components/s
 import { apiError } from "@/lib/utils"
 import { SkeletonRows } from "@/components/visual/skeleton"
 
-type Update = { id: string; text: string; createdAt: string }
+export type Update = { id: string; text: string; createdAt: string }
 
 const MAX = 1000
 
+/** The updates request on its own, so a page can start it together with the idea. */
+export const fetchUpdates = (ideaId: string) => apiClient.get<Update[]>(`/ideas/${ideaId}/updates`).then((r) => r.data)
+
 /**
  * The founder's updates on an idea, newest first. The owner gets a one-line composer; posting
- * tells every investor who saved or committed to the idea.
+ * tells every investor who saved or committed to the idea. `request` is the page's fetchUpdates
+ * call, started with the idea; without one it asks itself.
  */
-export function IdeaUpdates({ ideaId, isOwner }: { ideaId: string; isOwner: boolean }) {
+export function IdeaUpdates({ ideaId, isOwner, request }: { ideaId: string; isOwner: boolean; request?: Promise<Update[]> }) {
   const [updates, setUpdates] = useState<Update[] | null>(null)
   const [text, setText] = useState("")
   const [posting, setPosting] = useState(false)
@@ -22,11 +26,11 @@ export function IdeaUpdates({ ideaId, isOwner }: { ideaId: string; isOwner: bool
 
   const load = useCallback(async () => {
     try {
-      setUpdates((await apiClient.get<Update[]>(`/ideas/${ideaId}/updates`)).data)
+      setUpdates(await (request ?? fetchUpdates(ideaId)))
     } catch {
       setUpdates([])
     }
-  }, [ideaId])
+  }, [ideaId, request])
 
   useEffect(() => { load() }, [load])
 

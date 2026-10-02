@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { pillClass, quietLinkClass } from "@/components/shell/page"
 import { useAuth } from "@/components/auth-provider"
-import { useSomethingBox } from "@/components/something-box/provider"
+import { useSomethingBoxActions } from "@/components/something-box/provider"
 import { inbox, newClientId } from "@/lib/inbox-transport"
 import { apiError } from "@/lib/utils"
 
@@ -25,7 +25,7 @@ export function StartChatDialog({ open, onOpenChange, ideaId, ideaTitle, founder
 }) {
   const router = useRouter()
   const { user } = useAuth()
-  const box = useSomethingBox()
+  const box = useSomethingBoxActions()
   const first = (founderName || "").trim().split(/\s+/)[0]
   const greeting = first ? `Hi ${first}` : "Hi"
   const prefill = role === "investor"

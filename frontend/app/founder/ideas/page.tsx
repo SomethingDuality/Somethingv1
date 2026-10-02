@@ -1,13 +1,14 @@
 "use client"
 
-import { useState, useEffect, useCallback, useRef } from "react"
+import { memo, useState, useEffect, useCallback, useDeferredValue, useMemo, useRef } from "react"
 import { useRouter } from "next/navigation"
 import apiClient from "@/lib/axios"
+import { cached, cachedGet } from "@/lib/api-cache"
 import { apiError, cn } from "@/lib/utils"
 import { clearIdeaDraft, readIdeaDraft } from "@/lib/idea-draft"
 import { toast } from "@/components/ui/use-toast"
 import { labelFor } from "@/lib/taxonomy"
-import { useSomethingBox } from "@/components/something-box/provider"
+import { useSomethingBoxActions } from "@/components/something-box/provider"
 import { PostIdeaModal, type Attachment } from "@/components/post-idea-modal"
 import { Page, PageTitle, pillClass, quietLinkClass, countOf } from "@/components/shell/page"
 import { IdeaCard } from "@/components/visual/idea-card"
@@ -41,6 +42,8 @@ interface Idea {
   createdAt?: string
   attachments?: Attachment[]
   moderation?: { state: "hidden" | "removed" }
+  /** What the search box matches, lower-cased once (fields apart, so a query can't span two). */
+  search: string
 }
 
 interface IdeaFormData {
@@ -62,24 +65,30 @@ const normalize = (idea: any): Idea => ({
   ...idea,
   id: idea._id ?? idea.id,
   isYours: true, // set by callers that need it
+  search: [idea.title, idea.desc, idea.description, ...(idea.tags ?? []).map((t: string) => labelFor("sectors", t)), idea.author]
+    .filter(Boolean)
+    .join("\n")
+    .toLowerCase(),
 })
+type RawIdea = Parameters<typeof normalize>[0]
+const yours = (raw: RawIdea[]): Idea[] => raw.map((i) => ({ ...normalize(i), isYours: true }))
+// Everyone's ideas include the founder's own: those get Edit, not Support.
+const everyones = (raw: RawIdea[], myId?: string): Idea[] =>
+  raw.map((i) => ({ ...normalize(i), isYours: Boolean(myId) && String(i.founder_id) === String(myId) }))
 
 type SaveResult = { idea: Idea; failedUploads: string[] }
 
 // ---------- API Service ----------
 // No local fallbacks: a failed request throws, so the page never shows a save that didn't happen.
+// The two lists go through the per-user cache (lib/api-cache): `onIdeas` gets what this tab has
+// first, then the server's answer.
 const ideasAPI = {
-  async fetchYourIdeas(): Promise<Idea[]> {
-    const response = await apiClient.get("/ideas/user")
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return (response.data as any[]).map((i) => ({ ...normalize(i), isYours: true }))
+  fetchYourIdeas(onIdeas: (ideas: Idea[]) => void): Promise<void> {
+    return cachedGet<RawIdea[]>("/ideas/user", (data) => onIdeas(yours(data)))
   },
 
-  // Everyone's ideas include the founder's own: those get Edit, not Support.
-  async fetchDiscoverIdeas(myId?: string): Promise<Idea[]> {
-    const response = await apiClient.get("/ideas/discover")
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return (response.data as any[]).map((i) => ({ ...normalize(i), isYours: Boolean(myId) && String(i.founder_id) === String(myId) }))
+  fetchDiscoverIdeas(myId: string | undefined, onIdeas: (ideas: Idea[]) => void): Promise<void> {
+    return cachedGet<RawIdea[]>("/ideas/discover", (data) => onIdeas(everyones(data, myId)))
   },
 
   /** Uploads the not-yet-uploaded files and patches their URLs in; returns the names that failed. */
@@ -123,15 +132,17 @@ const ideasAPI = {
 }
 
 // Outside the page: defined inside, every keystroke in the search made a new component type and
-// remounted every card.
-function IdeaRow({ idea, onEdit, onSupported }: {
+// remounted every card. Memoized with stable handlers, so a keystroke re-renders no card at all.
+// Far below the fold the browser skips laying it out (content-visibility); the 4px padding
+// offset by a negative margin keeps focus rings unclipped.
+const IdeaRow = memo(function IdeaRow({ idea, onEdit, onSupported }: {
   idea: Idea
   onEdit: (idea: Idea) => void
   onSupported: (ideaId: string, next: { supported: boolean; count: number }) => void
 }) {
   const pill = "rounded-full border border-line px-3 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground cursor-pointer"
   return (
-    <li>
+    <li className="-m-1 p-1 [content-visibility:auto] [contain-intrinsic-size:auto_460px]">
       <IdeaCard
         href={`/founder/ideas/${idea.id}`}
         idea={{
@@ -172,16 +183,17 @@ function IdeaRow({ idea, onEdit, onSupported }: {
       </p>
     </li>
   )
-}
+})
 
 // ---------- Component ----------
 export default function FounderIdeasPage() {
   const { user } = useAuth()
   const [tab, setTab] = useState<Tab>("yours")
   const [query, setQuery] = useState("")
-  const [yourIdeas, setYourIdeas] = useState<Idea[]>([])
-  const [discoverIdeas, setDiscoverIdeas] = useState<Idea[]>([])
-  const [isLoading, setIsLoading] = useState(true)
+  // What this tab already has paints at once (lib/api-cache); loadIdeas checks it.
+  const [yourIdeas, setYourIdeas] = useState<Idea[]>(() => yours(cached<RawIdea[]>("/ideas/user") ?? []))
+  const [discoverIdeas, setDiscoverIdeas] = useState<Idea[]>(() => everyones(cached<RawIdea[]>("/ideas/discover") ?? [], user?.id))
+  const [isLoading, setIsLoading] = useState(() => !cached("/ideas/user"))
   const [error, setError] = useState<string | null>(null)
   const [showFilters, setShowFilters] = useState(false)
   const [stageFilter, setStageFilter] = useState<"all" | Stage>("all")
@@ -205,16 +217,11 @@ export default function FounderIdeasPage() {
 
   // quiet: refresh in place (no spinner), e.g. after the Something box fills in a stage.
   const loadIdeas = useCallback(async (quiet = false) => {
-    if (!quiet) setIsLoading(true)
+    if (!quiet && !cached(tab === "yours" ? "/ideas/user" : "/ideas/discover")) setIsLoading(true)
     setError(null)
     try {
-      if (tab === "yours") {
-        const ideas = await ideasAPI.fetchYourIdeas()
-        setYourIdeas(ideas)
-      } else {
-        const ideas = await ideasAPI.fetchDiscoverIdeas(user?.id)
-        setDiscoverIdeas(ideas)
-      }
+      if (tab === "yours") await ideasAPI.fetchYourIdeas(setYourIdeas)
+      else await ideasAPI.fetchDiscoverIdeas(user?.id, setDiscoverIdeas)
     } catch (err) {
       setError(apiError(err, "Couldn't load ideas."))
     } finally {
@@ -234,31 +241,25 @@ export default function FounderIdeasPage() {
   }, [loadIdeas])
 
   const ideas = tab === "yours" ? yourIdeas : discoverIdeas
-  const filtered = ideas
-    .filter((idea) => {
-      const matchesQuery =
-        idea.title.toLowerCase().includes(query.toLowerCase()) ||
-        idea.desc?.toLowerCase().includes(query.toLowerCase()) ||
-        idea.description?.toLowerCase().includes(query.toLowerCase()) ||
-        idea.tags.some((tag) => labelFor("sectors", tag).toLowerCase().includes(query.toLowerCase())) ||
-        idea.author.toLowerCase().includes(query.toLowerCase())
+  // Filters on a deferred copy of the query, so typing stays quick on a long list.
+  const deferredQuery = useDeferredValue(query)
+  const filtered = useMemo(() => {
+    const q = deferredQuery.toLowerCase()
+    return ideas
+      .filter((idea) => (!q || idea.search.includes(q)) && (stageFilter === "all" || idea.stage === stageFilter))
+      .sort((a, b) => {
+        if (sortBy === "likes") return b.likes - a.likes
+        if (sortBy === "views") return b.views - a.views
+        const dateA = a.createdAt || ""
+        const dateB = b.createdAt || ""
+        return dateB.localeCompare(dateA)
+      })
+  }, [ideas, deferredQuery, stageFilter, sortBy])
 
-      const matchesStage = stageFilter === "all" || idea.stage === stageFilter
-
-      return matchesQuery && matchesStage
-    })
-    .sort((a, b) => {
-      if (sortBy === "likes") return b.likes - a.likes
-      if (sortBy === "views") return b.views - a.views
-      const dateA = a.createdAt || ""
-      const dateB = b.createdAt || ""
-      return dateB.localeCompare(dateA)
-    })
-
-  function handleEditClick(idea: Idea) {
+  const handleEditClick = useCallback((idea: Idea) => {
     setEditingIdea(idea)
     setIsModalOpen(true)
-  }
+  }, [])
 
   // ?edit=<id> (from the Something page's Readiness list) opens that idea's edit form once
   // the founder's ideas have loaded.
@@ -275,9 +276,9 @@ export default function FounderIdeasPage() {
       handleEditClick(target)
       router.replace("/founder/ideas")
     }
-  }, [yourIdeas, isLoading, router])
+  }, [yourIdeas, isLoading, router, handleEditClick])
 
-  const somethingBox = useSomethingBox()
+  const somethingBox = useSomethingBoxActions()
 
   // Files are uploaded after the idea is saved; say so if any didn't make it rather than dropping them quietly.
   function reportUploads(failed: string[]) {
@@ -338,10 +339,10 @@ export default function FounderIdeasPage() {
   }
 
   // Keeps the counts under the cards in step with the Support button.
-  function handleSupported(ideaId: string, next: { supported: boolean; count: number }) {
+  const handleSupported = useCallback((ideaId: string, next: { supported: boolean; count: number }) => {
     const apply = (ideas: Idea[]) => ideas.map((idea) => (idea.id === ideaId ? { ...idea, likes: next.count, supportedByMe: next.supported } : idea))
     setDiscoverIdeas(apply)
-  }
+  }, [])
 
   const tabClass = (on: boolean) =>
     cn("text-[15px] transition-colors cursor-pointer", on ? "text-foreground" : "text-muted-foreground hover:text-foreground")

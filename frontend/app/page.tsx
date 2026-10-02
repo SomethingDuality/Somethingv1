@@ -2,8 +2,7 @@
 
 import { useState, useRef, useEffect } from "react"
 import { useRouter } from "next/navigation"
-import { motion, useInView, useScroll, useTransform } from "framer-motion"
-import Image from "next/image"
+import { LazyMotion, domAnimation, m, useInView, useScroll, useTransform } from "framer-motion"
 import { NavAvant } from "@/components/nav-avant"
 import { LandingBg } from "@/components/landing-bg"
 import { ActionPicker } from "@/components/action-picker"
@@ -19,12 +18,12 @@ function HeroSection({ onCTA }: { onCTA: () => void }) {
 
   return (
     <section className="relative min-h-screen flex flex-col items-center justify-center px-6 py-24">
-      <motion.div
+      <m.div
         className="text-center max-w-4xl mx-auto flex flex-col items-center"
         style={{ opacity: heroOpacity, y: heroY }}
       >
         {/* Tiny floating mascot above headline */}
-        <motion.div
+        <m.div
           className="mb-6 flex justify-center"
           initial={{ opacity: 0, scale: 0.8 }}
           animate={{
@@ -39,19 +38,22 @@ function HeroSection({ onCTA }: { onCTA: () => void }) {
           }}
         >
           <div className="relative h-12 w-12 opacity-40 hover:opacity-70 transition-opacity duration-700">
-            <Image
-              src="/thing-logo.png"
+            {/* The same 96 px file as the nav's logo: 2x for this 48 px spot. */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src="/thing-logo-96.webp"
               alt="Thing"
-              fill
-              className="object-contain invert"
-              sizes="48px"
-              priority
+              width={48}
+              height={48}
+              fetchPriority="high"
+              decoding="async"
+              className="absolute inset-0 h-full w-full object-contain invert text-transparent"
             />
           </div>
-        </motion.div>
+        </m.div>
 
         {/* Headline — the word "something" IS the show */}
-        <motion.h1
+        <m.h1
           className="text-white/50 text-lg sm:text-xl font-normal tracking-tight mb-4"
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
@@ -59,9 +61,9 @@ function HeroSection({ onCTA }: { onCTA: () => void }) {
           style={{ fontFamily: "var(--font-outfit)" }}
         >
           you&apos;re working on
-        </motion.h1>
+        </m.h1>
 
-        <motion.h2
+        <m.h2
           className="text-7xl sm:text-8xl lg:text-[10rem] font-bold tracking-tighter leading-[0.85]"
           initial={{ opacity: 0, y: 30 }}
           animate={{ opacity: 1, y: 0 }}
@@ -70,26 +72,26 @@ function HeroSection({ onCTA }: { onCTA: () => void }) {
         >
           something
           <span className="text-white/15">.</span>
-        </motion.h2>
+        </m.h2>
 
         {/* Sub copy — clear value proposition */}
-        <motion.p
+        <m.p
           className="mt-10 text-white/70 text-sm sm:text-base leading-relaxed max-w-xl mx-auto"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ duration: 0.7, delay: 0.7 }}
         >
           Most ideas die quietly — in someone&apos;s head, without a team, or in a cold inbox. Something won&apos;t let yours. Two AI agents argue over it first. One tries to kill it. If it survives, the <span className="text-[#E3C27A] font-semibold">right people</span> find you.
-        </motion.p>
+        </m.p>
 
         {/* CTA */}
-        <motion.div
+        <m.div
           className="mt-10 flex flex-col items-center gap-4"
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.6, delay: 0.9 }}
         >
-          <motion.button
+          <m.button
             onClick={onCTA}
             className="rounded-full px-10 py-4 text-sm font-semibold text-[#0a0a0c] bg-white cursor-pointer"
             whileHover={{
@@ -101,26 +103,26 @@ function HeroSection({ onCTA }: { onCTA: () => void }) {
             style={{ boxShadow: "0 0 0 1px rgba(255,255,255,0.08) inset, 0 4px 20px rgba(0,0,0,0.4)" }}
           >
             Get started →
-          </motion.button>
+          </m.button>
           <span className="text-[11px] text-white/60 tracking-wide">
             private by default · verified proof-of-work · zero lock-in
           </span>
-        </motion.div>
-      </motion.div>
+        </m.div>
+      </m.div>
 
       {/* Scroll indicator */}
-      <motion.div
+      <m.div
         className="absolute bottom-10 left-1/2 -translate-x-1/2"
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ delay: 1.5 }}
       >
-        <motion.div
+        <m.div
           className="w-px h-8 bg-gradient-to-b from-white/20 to-transparent mx-auto"
           animate={{ scaleY: [1, 0.5, 1] }}
           transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
         />
-      </motion.div>
+      </m.div>
     </section>
   )
 }
@@ -155,7 +157,7 @@ function DualSection() {
     <section id="duo" ref={ref} className="relative">
       {/* Section intro — full width centered */}
       <div className="mx-auto max-w-6xl px-6 sm:px-8 pt-28 sm:pt-40 pb-16">
-        <motion.div
+        <m.div
           initial={{ opacity: 0, y: 20 }}
           animate={inView ? { opacity: 1, y: 0 } : {}}
           transition={{ duration: 0.7 }}
@@ -169,7 +171,7 @@ function DualSection() {
             <br />
             <span className="text-white/15">both doubt and belief.</span>
           </h2>
-        </motion.div>
+        </m.div>
       </div>
 
       {/* The split — full bleed */}
@@ -179,7 +181,7 @@ function DualSection() {
           const isDimmed = active !== null && !isActive
 
           return (
-            <motion.div
+            <m.div
               key={s.id}
               initial={{ opacity: 0, x: i === 0 ? -40 : 40 }}
               animate={inView ? { opacity: isDimmed ? 0.3 : 1, x: 0 } : {}}
@@ -253,7 +255,7 @@ function DualSection() {
                   background: `linear-gradient(90deg, transparent 5%, ${s.accent}60 50%, transparent 95%)`,
                 }}
               />
-            </motion.div>
+            </m.div>
           )
         })}
       </div>
@@ -287,7 +289,7 @@ function HowSection() {
     <section ref={ref} className="py-28 sm:py-40" id="how">
       {/* Marquee ticker */}
       <div className="overflow-hidden mb-20 opacity-[0.2]">
-        <motion.div
+        <m.div
           className="flex whitespace-nowrap gap-12 text-6xl sm:text-7xl font-bold tracking-tighter"
           animate={{ x: ["0%", "-50%"] }}
           transition={{ duration: 30, repeat: Infinity, ease: "linear" }}
@@ -307,11 +309,11 @@ function HowSection() {
               <span className="text-white/30">·</span>
             </span>
           ))}
-        </motion.div>
+        </m.div>
       </div>
 
       <div className="mx-auto max-w-5xl px-6 sm:px-8">
-        <motion.h2
+        <m.h2
           initial={{ opacity: 0, y: 20 }}
           animate={inView ? { opacity: 1, y: 0 } : {}}
           transition={{ duration: 0.7 }}
@@ -319,12 +321,12 @@ function HowSection() {
           style={{ fontFamily: "var(--font-outfit)" }}
         >
           from hidden idea<span className="text-white/45"> to funded company</span>
-        </motion.h2>
+        </m.h2>
 
         {/* Steps — minimal timeline */}
         <div className="space-y-0">
           {flow.map((f, i) => (
-            <motion.div
+            <m.div
               key={f.step}
               initial={{ opacity: 0 }}
               animate={inView ? { opacity: 1 } : {}}
@@ -358,7 +360,7 @@ function HowSection() {
                 className="col-span-full h-px opacity-0 group-hover:opacity-100 transition-opacity duration-500 mt-8"
                 style={{ background: `linear-gradient(90deg, ${f.accent}20, transparent 60%)` }}
               />
-            </motion.div>
+            </m.div>
           ))}
         </div>
       </div>
@@ -383,7 +385,7 @@ function FundingSection() {
 
   return (
     <section ref={ref} id="funding" className="mx-auto max-w-5xl px-6 sm:px-8 py-28 sm:py-40">
-      <motion.div
+      <m.div
         initial={{ opacity: 0, y: 20 }}
         animate={inView ? { opacity: 1, y: 0 } : {}}
         transition={{ duration: 0.7 }}
@@ -398,10 +400,10 @@ function FundingSection() {
         <p className="mt-4 text-white/60 text-sm max-w-md mx-auto leading-relaxed">
           Milestone-locked payments. Clear tracking. No hidden fees or black boxes.
         </p>
-      </motion.div>
+      </m.div>
 
       {/* Escrow Status Summary Banner */}
-      <motion.div
+      <m.div
         initial={{ opacity: 0, y: 10 }}
         animate={inView ? { opacity: 1, y: 0 } : {}}
         transition={{ delay: 0.15 }}
@@ -422,10 +424,10 @@ function FundingSection() {
           <span className="text-white/30">/</span>
           <span>$21,800</span>
         </div>
-      </motion.div>
+      </m.div>
 
       {/* Stacked horizontal bars — each milestone is a proportional bar */}
-      <motion.div
+      <m.div
         initial={{ opacity: 0, y: 20 }}
         animate={inView ? { opacity: 1, y: 0 } : {}}
         transition={{ delay: 0.25 }}
@@ -433,22 +435,22 @@ function FundingSection() {
       >
         {/* Combined bar */}
         <div className="flex h-4 rounded-full overflow-hidden gap-0.5 bg-white/[0.02] p-1 border border-white/5 backdrop-blur-sm">
-          {milestones.map((m, i) => {
+          {milestones.map((milestone, i) => {
             const isHovered = hoveredIdx === i
             const isDimmed = hoveredIdx !== null && hoveredIdx !== i
 
             return (
-              <motion.div
-                key={m.name}
+              <m.div
+                key={milestone.name}
                 className="h-full rounded-full cursor-pointer relative"
                 style={{
-                  backgroundColor: m.color,
-                  boxShadow: isHovered ? `0 0 15px ${m.color}cc` : "none",
+                  backgroundColor: milestone.color,
+                  boxShadow: isHovered ? `0 0 15px ${milestone.color}cc` : "none",
                   zIndex: isHovered ? 10 : 1,
                 }}
                 initial={{ width: 0 }}
                 animate={inView ? {
-                  width: `${m.pct}%`,
+                  width: `${milestone.pct}%`,
                   opacity: isDimmed ? 0.35 : 1,
                   scaleY: isHovered ? 1.15 : 1
                 } : {}}
@@ -468,17 +470,17 @@ function FundingSection() {
           <span className="hidden sm:inline">Released: $11,100</span>
           <span>Target pool ($21,800)</span>
         </div>
-      </motion.div>
+      </m.div>
 
       {/* Milestone rows */}
       <div className="space-y-1 relative">
-        {milestones.map((m, i) => {
+        {milestones.map((milestone, i) => {
           const isHovered = hoveredIdx === i
           const isDimmed = hoveredIdx !== null && hoveredIdx !== i
 
           return (
-            <motion.div
-              key={m.name}
+            <m.div
+              key={milestone.name}
               initial={{ opacity: 0 }}
               animate={inView ? { opacity: isDimmed ? 0.45 : 1 } : {}}
               transition={{ delay: 0.45 + i * 0.06 }}
@@ -495,28 +497,28 @@ function FundingSection() {
                 <span
                   className="h-2 w-2 rounded-full shrink-0 transition-all duration-300"
                   style={{
-                    backgroundColor: m.color,
+                    backgroundColor: milestone.color,
                     transform: isHovered ? "scale(1.25)" : "scale(1)",
-                    boxShadow: isHovered ? `0 0 10px ${m.color}` : "none",
+                    boxShadow: isHovered ? `0 0 10px ${milestone.color}` : "none",
                   }}
                 />
                 <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-3">
                   <span className="text-sm font-medium transition-colors" style={{ color: isHovered ? "rgba(255,255,255,0.95)" : "rgba(255,255,255,0.65)" }}>
-                    {m.name}
+                    {milestone.name}
                   </span>
-                  {m.receiptId && (
+                  {milestone.receiptId && (
                     <span className="text-[11px] font-mono text-white/40 hover:text-white/70 transition-colors">
-                      {m.receiptId}
+                      {milestone.receiptId}
                     </span>
                   )}
-                  {isHovered && m.details && (
-                    <motion.span
+                  {isHovered && milestone.details && (
+                    <m.span
                       initial={{ opacity: 0, x: -5 }}
                       animate={{ opacity: 1, x: 0 }}
                       className="text-[11px] text-white/45 font-mono"
                     >
-                      {m.details}
-                    </motion.span>
+                      {milestone.details}
+                    </m.span>
                   )}
                 </div>
               </div>
@@ -524,36 +526,36 @@ function FundingSection() {
                 <span
                   className={cn(
                     "text-[11px] font-mono tracking-wide uppercase px-2.5 py-0.5 rounded border transition-colors duration-300",
-                    m.status === "Released" && "text-emerald-400/80 bg-emerald-500/5 border-emerald-500/10",
-                    m.status === "In progress" && "text-indigo-400/80 bg-indigo-500/5 border-indigo-500/10",
-                    m.status === "Pending" && "text-white/45 bg-white/5 border-white/8"
+                    milestone.status === "Released" && "text-emerald-400/80 bg-emerald-500/5 border-emerald-500/10",
+                    milestone.status === "In progress" && "text-indigo-400/80 bg-indigo-500/5 border-indigo-500/10",
+                    milestone.status === "Pending" && "text-white/45 bg-white/5 border-white/8"
                   )}
                 >
-                  {m.status}
+                  {milestone.status}
                 </span>
                 <span
                   className="text-sm font-semibold tabular-nums tracking-tight transition-colors duration-300"
                   style={{
                     fontFamily: "var(--font-outfit)",
-                    color: isHovered ? m.color : "rgba(255,255,255,0.65)"
+                    color: isHovered ? milestone.color : "rgba(255,255,255,0.65)"
                   }}
                 >
-                  ${m.amount.toLocaleString()}
+                  ${milestone.amount.toLocaleString()}
                 </span>
               </div>
-            </motion.div>
+            </m.div>
           )
         })}
       </div>
 
-      <motion.p
+      <m.p
         initial={{ opacity: 0 }}
         animate={inView ? { opacity: 1 } : {}}
         transition={{ delay: 0.9 }}
         className="mt-10 text-center text-[11px] text-white/45 tracking-widest uppercase font-mono"
       >
         secure escrow account · milestone verification · clear receipts
-      </motion.p>
+      </m.p>
     </section>
   )
 }
@@ -621,21 +623,25 @@ export default function Page() {
     router.prefetch("/signup")
   }, [router])
 
+  // m.* with only the DOM animation features (no layout or drag): about half of framer-motion.
+  // `strict` throws in development if a full motion.* component sneaks back in.
   return (
-    <main className="min-h-screen bg-[#0a0a0c] text-white relative" style={{ zIndex: 1 }}>
-      <LandingBg />
-      <NavAvant />
+    <LazyMotion features={domAnimation} strict>
+      <main className="min-h-screen bg-[#0a0a0c] text-white relative" style={{ zIndex: 1 }}>
+        <LandingBg />
+        <NavAvant />
 
-      <HeroSection onCTA={() => setPickerOpen(true)} />
-      <ActionPicker open={pickerOpen} onClose={() => setPickerOpen(false)} />
+        <HeroSection onCTA={() => setPickerOpen(true)} />
+        <ActionPicker open={pickerOpen} onClose={() => setPickerOpen(false)} />
 
-      <Divider />
-      <DualSection />
-      <Divider />
-      <HowSection />
-      <Divider />
-      <FundingSection />
-      <Footer />
-    </main>
+        <Divider />
+        <DualSection />
+        <Divider />
+        <HowSection />
+        <Divider />
+        <FundingSection />
+        <Footer />
+      </main>
+    </LazyMotion>
   )
 }

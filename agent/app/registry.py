@@ -13,7 +13,7 @@ def register_features(manager, saver) -> None:
     from app.review import service as review_service
     from app.review.graph.builder import compile_review
 
-    manager.register("memory_write", compile_memory_write(saver))
+    manager.register("memory_write", compile_memory_write(saver), durability="exit")
     manager.register("review", compile_review(saver), on_finish=review_service.on_finish)
 
 

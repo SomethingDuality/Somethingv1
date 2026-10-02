@@ -26,7 +26,7 @@ from app.memory import slots, store
 from app.memory.decide import _equal
 from app.memory.prompts.extract_prompt import MEMORY_EXTRACT_PROMPT
 from app.memory.schemas import Extraction
-from app.models import llm
+from app.models import embeddings, llm
 
 
 class MemoryWriteFailed(Exception):
@@ -55,17 +55,20 @@ def idea_scope(user_id: str, idea_id: str) -> dict:
 
 # ---- running candidates ---------------------------------------------------------------------
 
-async def run_candidate(scope: dict, cand: dict) -> dict:
-    """One candidate through the write graph, waiting until it ends or pauses for a confirm."""
+async def run_candidate(scope: dict, cand: dict, *, embedding: list[float] | None = None) -> dict:
+    """One candidate through the write graph, waiting until it ends or pauses for a confirm.
+    `embedding`: a vector already made for this text (run_all embeds a batch in one call)."""
     done = await db.col("agent_runs").find_one({"kind": "memory_write", "candidate_id": cand["candidate_id"],
                                                 "status": {"$in": ["queued", "running", "interrupted", "complete"]}})
     if done:
         return done
     run_id = uuid.uuid4().hex
+    state = {"scope": scope, "candidate": cand, "limits": limits(), "commit_attempts": 0}
+    if embedding is not None:
+        state.update(embedding=embedding, embedding_model=embeddings.model_name(), embedded_text_key=store.text_key(cand["text"]))
     await manager.start("memory_write", thread_id=thread_id(scope["user_id"], "mem", run_id, scope.get("idea_id")),
                         user_id=scope["user_id"], idea_id=scope.get("idea_id"), run_id=run_id,
-                        input={"scope": scope, "candidate": cand, "limits": limits(), "commit_attempts": 0},
-                        meta={"candidate_id": cand["candidate_id"]})
+                        input=state, meta={"candidate_id": cand["candidate_id"]})
     await manager.wait(run_id)
     run = await db.col("agent_runs").find_one({"_id": run_id})
     if run["status"] == "failed":
@@ -74,13 +77,26 @@ async def run_candidate(scope: dict, cand: dict) -> dict:
 
 
 async def run_all(scope: dict, cands: list[dict]) -> None:
-    seen = set()
+    """A batch of candidates for one scope: deduped within the batch, exact repeats of a current
+    note just cite it (no run at all: ~19 Mongo operations each), and the rest are embedded in
+    one call, then written one at a time (they may depend on each other)."""
+    todo, seen = [], set()
+    keys = store.read_keys(scope)
     for c in cands:
-        key = (c.get("slot_key"), c["text"].strip().lower())
+        key = (c.get("slot_key"), store.text_key(c["text"]))
         if key in seen:  # dedupe within the batch before searching
             continue
         seen.add(key)
-        await run_candidate(scope, c)
+        # Free facts only: a slot claim may be normalised (or dropped) by the prefilter first.
+        if not c.get("slot_key") and (dup := await store.find_duplicate(keys, c["text"], None)):
+            await store.cite([dup["_id"]])
+            continue
+        todo.append(c)
+    if not todo:
+        return
+    vecs = await embeddings.embed([c["text"] for c in todo], ctx={"feature": "memory", "node": "embed", "user_id": scope["user_id"]})
+    for c, v in zip(todo, vecs, strict=True):
+        await run_candidate(scope, c, embedding=v.tolist())
 
 
 # ---- building candidates ---------------------------------------------------------------------

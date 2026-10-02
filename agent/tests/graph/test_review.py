@@ -20,7 +20,7 @@ def graphs(fake_node):
     import app.memory.fakes  # noqa: F401
     import app.review.fakes  # noqa: F401
     saver = checkpointer.saver()
-    manager.register("memory_write", compile_memory_write(saver))
+    manager.register("memory_write", compile_memory_write(saver), durability="exit")
     manager.register("review", compile_review(saver), on_finish=service.on_finish)
     fake_node.add_user(USER, "Founder", location="Pune")
     fake_node.add_idea(IDEA, USER, title="Late night meals", description=VAGUE, stage="concept")
@@ -172,3 +172,10 @@ async def test_injection_is_flagged_and_does_not_buy_a_better_label():
     doc = await db.col("agent_reviews").find_one({"_id": rid})
     assert doc["flagged_for_human"] is True and "ignore_instructions" in doc["injection_signals"]
     assert doc["view"]["nothing"]["verdict"]["label"] != "ready"
+
+
+async def test_a_review_asks_node_for_the_idea_once(fake_node):
+    """The ownership check at the start and load_node share one context fetch."""
+    fake_node.requests.clear()
+    await run_review(idea_id=IDEA)
+    assert sum(1 for r in fake_node.requests if r.startswith("/internal/context/")) == 1

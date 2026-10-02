@@ -87,10 +87,15 @@ async def test_an_empty_profile_batch_does_not_hold_back_the_first_real_one(fake
     person = {"id": uid, "role": "Investor", "interests": [], "stageFocus": [], "minCheck": None, "maxCheck": None,
               "keywords": [], "thesis": "", "saved": [], "committed": []}
     fake_node.match_people[uid] = person
+    asked = lambda: sum(1 for r in fake_node.requests if r.endswith(f"/internal/match/user/{uid}"))  # noqa: E731
     assert (await deal_flow.current(uid, "Investor"))["need"]
     assert (await deal_flow.current(uid, "Investor"))["need"], "still empty: no new batch piles up"
     assert await db.col("agent_match_batches").count_documents({"user_id": uid}) == 1
+    assert asked() == 1, "an unready profile isn't fetched again on every visit"
+    # Node sends profile.updated when sectors change: the next visit looks again.
     fake_node.match_people[uid] = {**person, "interests": ["climate"]}
+    from app.api import events
+    await events.receive(events.EventIn(eventType="profile.updated", eventId="e-b8", userId=uid), None)
     view = await deal_flow.current(uid, "Investor")
     assert view["need"] is None and len(view["matches"]) == 5, "sectors added: matches right away, not in 7 days"
 

@@ -6,6 +6,7 @@ class ChatState(TypedDict):
     text: str
     idea_id: NotRequired[str | None]
     review_id: NotRequired[str | None]
+    review_view: NotRequired[dict]        # the review's stored view, read once by the service
     history: NotRequired[list[dict]]      # [{role: founder|something, text}] last few turns
     kind: NotRequired[str]                # general | judge_request | about_this | new_idea | unsure
     reply: NotRequired[str]

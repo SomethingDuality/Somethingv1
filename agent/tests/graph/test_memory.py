@@ -15,7 +15,7 @@ USER, IDEA = "65f000000000000000000001", "65f0000000000000000000aa"
 @pytest.fixture(autouse=True)
 def memory_graph(fake_node):
     import app.memory.fakes  # noqa: F401
-    manager.register("memory_write", compile_memory_write(checkpointer.saver()))
+    manager.register("memory_write", compile_memory_write(checkpointer.saver()), durability="exit")
     fake_node.add_user(USER, "Founder", location="Pune")
     fake_node.add_idea(IDEA, USER, title="Campus compost", description="Composting for canteens.", stage="prototype")
     yield fake_node
@@ -186,3 +186,24 @@ async def test_recall_ranks_the_relevant_note_first():
     top = await read.recall([scope()["scope_key"]], "how do canteens pay", k=2)
     assert top[0]["text"] == "Canteens pay per kilo of waste."
     assert "embedding" not in top[0]
+
+
+async def test_a_write_that_died_before_its_first_checkpoint_starts_over():
+    """Memory writes checkpoint only when they end or pause: a run left 'running' by a dead
+    process has no checkpoint, so recovery restarts it from the input kept on the run."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.core.checkpointer import thread_id
+    old = datetime.now(timezone.utc) - timedelta(minutes=5)
+    cand = ingest.field_candidate(scope(), ingest.slots.get("idea.pricing"), "₹10 per kilo", "2026-09-01", "pricing")
+    run_id = "deadbeefdeadbeefdeadbeefdeadbeef"
+    await db.col("agent_runs").insert_one({
+        "_id": run_id, "thread_id": thread_id(USER, "mem", run_id, IDEA), "kind": "memory_write", "user_id": USER,
+        "idea_id": IDEA, "status": "running", "owner": "dead-process", "heartbeat_at": old, "started_at": old,
+        "candidate_id": cand["candidate_id"],
+        "input": {"scope": scope(), "candidate": cand, "limits": ingest.limits(), "commit_attempts": 0},
+    })
+    assert await manager.recover() == 1
+    await manager.wait(run_id)
+    assert (await db.col("agent_runs").find_one({"_id": run_id}))["status"] == "complete"
+    assert [n["value"] for n in await current("idea.pricing")] == ["₹10 per kilo"]

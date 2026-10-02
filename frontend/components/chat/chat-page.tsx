@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 import { inbox, type Thread } from "@/lib/inbox-transport"
@@ -16,6 +16,9 @@ const FILTERS = [
 ] as const
 type Filter = (typeof FILTERS)[number]["id"]
 
+// A thread's updatedAt is its last message's time; the inbox's lastActivityAt is the newest of them.
+const newestOf = (threads: Thread[]) => threads.reduce((at, t) => Math.max(at, Date.parse(t.updatedAt) || 0), 0)
+
 const statusLabel = (t: Thread) =>
   t.status === "request_in" ? "Request"
   : t.status === "request_out" ? "Waiting for a reply"
@@ -25,8 +28,8 @@ const statusLabel = (t: Thread) =>
 /**
  * Chats (community C5), the same for founders and investors: the list on the left, the
  * conversation on the right (one at a time on phones). `?thread=<id>` opens one, which is where
- * notifications and "Message founder" land. The list refreshes when the shell's inbox poll
- * says something changed.
+ * notifications and "Message founder" land. The list reloads when the shell's inbox poll
+ * reports activity it doesn't show yet; what happens in the open chat updates it in place.
  */
 export function ChatPage({ role }: { role: "founder" | "investor" }) {
   const router = useRouter()
@@ -36,19 +39,34 @@ export function ChatPage({ role }: { role: "founder" | "investor" }) {
   const [threads, setThreads] = useState<Thread[] | null>(null)
   const [error, setError] = useState(false)
   const [filter, setFilter] = useState<Filter>("all")
+  // The newest activity the list shows (ms); undefined until the first load answers.
+  const [listAt, setListAt] = useState<number>()
+  const reloadedFor = useRef<string | null>(null)
 
   const load = useCallback(async () => {
     try {
-      setThreads((await inbox.threads()).threads)
+      const { threads: list } = await inbox.threads()
+      setThreads(list)
+      setListAt((at) => Math.max(at ?? 0, newestOf(list)))
       setError(false)
     } catch {
       setError(true)
       setThreads((cur) => cur ?? [])
+      setListAt((at) => at ?? 0)
     }
   }, [])
 
+  useEffect(() => { load() }, [load])
+
+  // The inbox poll says chats changed: reload only for activity newer than the list's (a message
+  // sent or received in the open chat already updated it), once per new value.
   const activity = summary?.chats.lastActivityAt
-  useEffect(() => { load() }, [load, activity])
+  useEffect(() => {
+    if (!activity || listAt === undefined || reloadedFor.current === activity) return
+    if (Date.parse(activity) <= listAt) return
+    reloadedFor.current = activity
+    load()
+  }, [activity, listAt, load])
 
   const open = (id: string | null) => router.replace(id ? `/${role}/chats?thread=${id}` : `/${role}/chats`)
   const onThreadChange = useCallback((t: Thread) => {
@@ -56,6 +74,7 @@ export function ChatPage({ role }: { role: "founder" | "investor" }) {
       if (!cur) return cur
       return cur.some((x) => x.id === t.id) ? cur.map((x) => (x.id === t.id ? t : x)) : [t, ...cur]
     })
+    setListAt((at) => Math.max(at ?? 0, Date.parse(t.updatedAt) || 0))
   }, [])
 
   const requests = threads?.filter((t) => t.status === "request_in") ?? []

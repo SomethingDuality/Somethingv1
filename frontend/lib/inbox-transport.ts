@@ -38,8 +38,21 @@ export type InboxSummary = {
   chats: { unreadThreads: number; unreadMessages: number; incomingRequests: number; lastActivityAt: string | null }
 }
 
+export type Notification = {
+  id: string
+  text: string
+  timestamp: string
+  read: boolean
+  /** The page it opens, e.g. the idea it is about. */
+  link?: string | null
+}
+
 export const inbox = {
   summary: () => apiClient.get<InboxSummary>("/inbox/summary").then((r) => r.data),
+  notifications: () => apiClient.get<Notification[]>("/notifications").then((r) => r.data),
+  markNotificationRead: (id: string) => apiClient.post(`/notifications/mark-read/${id}`, {}),
+  markAllNotificationsRead: () => apiClient.post("/notifications/mark-all-read", {}),
+  clearNotifications: () => apiClient.delete("/notifications"),
   threads: () => apiClient.get<{ threads: Thread[]; lastActivityAt: string | null }>("/threads").then((r) => r.data),
   thread: (id: string) => apiClient.get<Thread>(`/threads/${id}`).then((r) => r.data),
   messages: (id: string, after?: string) =>

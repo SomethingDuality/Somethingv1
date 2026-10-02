@@ -5,6 +5,7 @@ Four timestamps per note (research, after Zep): valid_at (became true in the wor
 A note is never edited in place: an UPDATE writes a new version in the lineage, an INVALIDATE
 closes the old note and adds the new one. Every decision is one transaction guarded by the scope
 version, so two writers can't both win."""
+import hashlib
 import uuid
 from datetime import datetime, timezone
 
@@ -13,6 +14,7 @@ from bson.binary import Binary, BinaryVectorDtype
 from pymongo.errors import DuplicateKeyError
 
 from app.core import db
+from app.core.quotes import norm
 from app.memory import slots
 from app.memory.decide import when_iso
 from app.memory.schemas import DECAY
@@ -45,12 +47,38 @@ def to_binary(vec: np.ndarray) -> Binary:
 def to_vec(b: Binary | None) -> np.ndarray:
     if b is None:
         return np.zeros(0, dtype=np.float32)
+    # A FLOAT32 vector is a 2-byte header (dtype, padding) then little-endian floats: reading the
+    # buffer directly is ~60x faster than as_vector() (51 µs a note).
+    raw = bytes(b)
+    if raw[:1] == b"\x27":
+        return np.frombuffer(raw, dtype="<f4", offset=2)
     return np.asarray(b.as_vector().data, dtype=np.float32)
 
 
-async def current_notes(keys: list[str], *, embeddings: bool = True) -> list[dict]:
+def text_key(text: str) -> str:
+    """What makes two notes "the same words": normalised text, hashed (indexed per scope)."""
+    return hashlib.sha256(norm(text).encode()).hexdigest()[:32]
+
+
+async def current_notes(keys: list[str], *, embeddings: bool = True, exclude_sources: tuple[str, ...] = (),
+                        kinds: tuple[str, ...] | None = None, slot_key: str | None = None) -> list[dict]:
+    """Current notes of these scopes. Filters run in Mongo, so excluded notes (critic notes pile up
+    at ~6 a review) are never fetched with their 4 KB embeddings."""
+    query: dict = {"scope_key": {"$in": keys}, "status": "current"}
+    if exclude_sources:
+        query["source.type"] = {"$nin": list(exclude_sources)}
+    if kinds is not None:
+        query["kind"] = {"$in": list(kinds)}
+    if slot_key is not None:
+        query["slot_key"] = slot_key
     projection = None if embeddings else {"embedding": 0}
-    return [n async for n in db.col("agent_notes").find({"scope_key": {"$in": keys}, "status": "current"}, projection)]
+    return [n async for n in db.col("agent_notes").find(query, projection)]
+
+
+async def find_duplicate(keys: list[str], text: str, slot_key: str | None) -> dict | None:
+    """A current note with the same words and slot (one indexed read, not the whole scope)."""
+    return await db.col("agent_notes").find_one(
+        {"scope_key": {"$in": keys}, "status": "current", "text_key": text_key(text), "slot_key": slot_key}, {"_id": 1})
 
 
 async def ensure_scope(scope: dict) -> int:
@@ -74,7 +102,7 @@ def _new_note(scope: dict, cand: dict, decision: dict, embedding: list | None, m
         "lineage_id": lineage or uuid.uuid4().hex, "version": version,
         "slot_key": slot.key if slot else None,
         "kind": kind,
-        "text": cand["text"], "value": cand.get("value"), "quote": cand.get("quote", ""),
+        "text": cand["text"], "text_key": text_key(cand["text"]), "value": cand.get("value"), "quote": cand.get("quote", ""),
         "source": cand.get("source", {}), "source_at": cand.get("source", {}).get("at"),
         "provenance": cand["provenance"], "confirmed_at": cand.get("confirmed_at"),
         "modality": cand.get("modality", "decided"),

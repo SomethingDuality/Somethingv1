@@ -42,13 +42,15 @@ async def pinned_tz(user_id: str, tz: str | None) -> str:
     real move once a month."""
     want = tz if tz and _zone(tz) is not timezone.utc else "UTC"
     col, now = db.col("agent_quotas"), datetime.now(timezone.utc)
-    try:
-        doc = await col.find_one_and_update(
-            {"_id": f"{user_id}:tz"}, {"$setOnInsert": {"tz": want, "at": now, "user_id": user_id}},
-            upsert=True, return_document=True,
-        )
-    except DuplicateKeyError:  # created by a parallel request
-        doc = await col.find_one({"_id": f"{user_id}:tz"})
+    doc = await col.find_one({"_id": f"{user_id}:tz"})  # a read on every call; a write only the first time
+    if doc is None:
+        try:
+            doc = await col.find_one_and_update(
+                {"_id": f"{user_id}:tz"}, {"$setOnInsert": {"tz": want, "at": now, "user_id": user_id}},
+                upsert=True, return_document=True,
+            )
+        except DuplicateKeyError:  # created by a parallel request
+            doc = await col.find_one({"_id": f"{user_id}:tz"})
     if doc["tz"] != want and doc["at"] < now - TZ_CHANGE_AFTER:
         await col.update_one({"_id": doc["_id"], "at": doc["at"]}, {"$set": {"tz": want, "at": now}})
         return want

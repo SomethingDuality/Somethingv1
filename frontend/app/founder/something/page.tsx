@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 import Link from "next/link"
 import { ArrowUp, X } from "lucide-react"
 import apiClient from "@/lib/axios"
+import { cached, cachedGet } from "@/lib/api-cache"
 import { useJustInTimeQuestion } from "@/components/something-box/provider"
 import { Creature } from "@/components/creature/creature"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
@@ -52,9 +53,7 @@ type Turn = {
   /** Something's answer when the message wasn't an idea ("hi"). */
   general: string | null
   reviewError: string | null
-  /** The id of the newest stream event applied to `review`. */
-  lastSeq: number
-  /** `lastSeq` may be behind the agent's newest event (brought back after a reload, or polled). */
+  /** The newest event id we have (`seqs`) may be behind the agent's (brought back after a reload, or polled). */
   seqBehind?: boolean
   reacting: boolean
   /** Brought back after a reload: the checks below weren't run for it. */
@@ -106,13 +105,19 @@ const READERS: Record<Reader, {
 const EXAMPLE_IDEA = "Late-night meals for college hostels"
 const GONE = { code: "not_found", message: "This review isn't available any more.", retryable: false }
 
+const sameProgress = (a: Progress, b: Progress) => a === b || (a !== null && b !== null && a.stage === b.stage && a.text === b.text)
+
+// Whether the review agent answered "live" earlier in this tab. If so the latest review is asked
+// for alongside the status; otherwise only after it (a review agent that is down answers 503).
+let agentWasLive = false
+
 export default function SomethingPage() {
   useJustInTimeQuestion("ai_review")
-  const [ideas, setIdeas] = useState<SavedIdea[]>([])
-  const [profileDone, setProfileDone] = useState(0)
+  // The founder's ideas and profile paint from what this tab already has (lib/api-cache).
+  const [ideas, setIdeas] = useState<SavedIdea[]>(() => cached<SavedIdea[]>("/ideas/user") ?? [])
+  const [profileDone, setProfileDone] = useState(() => cached<{ profileCompletion?: number }>("/founder/profile")?.profileCompletion ?? 0)
   const [waitlist, setWaitlist] = useState<boolean | null>(null)
 
-  const [text, setText] = useState("")
   const [picked, setPicked] = useState<SavedIdea | null>(null)
   const [readers, setReaders] = useState<Reader[]>(["something", "nothing"])
   const [turns, setTurns] = useState<Turn[]>([])
@@ -121,11 +126,29 @@ export default function SomethingPage() {
   const [quota, setQuota] = useState<Quota | null>(null)
   const endRef = useRef<HTMLDivElement>(null)
   const follows = useRef(new Map<number, AbortController>())
+  // The newest stream event id applied, per turn. Not state: most events (progress) change
+  // nothing on screen, and a new id alone shouldn't re-render the page.
+  const seqs = useRef(new Map<number, number>())
   // False once the page is gone: a review started or reacted to just before leaving opens no stream.
   const alive = useRef(true)
 
+  // Updates one turn; a patch that changes nothing leaves the list (and the page) as it was.
   const patch = useCallback((id: number, f: (t: Turn) => Partial<Turn>) => {
-    setTurns((all) => all.map((t) => (t.id === id ? { ...t, ...f(t) } : t)))
+    setTurns((all) => {
+      let changed = false
+      const next = all.map((t) => {
+        if (t.id !== id) return t
+        const p = f(t)
+        if ((Object.keys(p) as (keyof Turn)[]).every((k) => Object.is(p[k], t[k]))) return t
+        changed = true
+        return { ...t, ...p }
+      })
+      return changed ? next : all
+    })
+  }, [])
+
+  const noteSeq = useCallback((turnId: number, seq: number) => {
+    seqs.current.set(turnId, Math.max(seqs.current.get(turnId) ?? 0, seq))
   }, [])
 
   // Follow a review's stream from `after` until it pauses for the founder (a pause newer than
@@ -139,50 +162,60 @@ export default function SomethingPage() {
       after,
       known,
       signal: ctrl.signal,
-      onEvent: (ev) => patch(turnId, (t) => {
-        if (!t.review) return {}
-        const out = applyEvent(t.review, ev)
+      onEvent: (ev) => {
         const seq = seqOf(ev)
-        return {
-          review: out.view,
-          ...(out.progress !== undefined && { progress: out.progress }),
-          lastSeq: seq === null ? t.lastSeq : Math.max(t.lastSeq, seq),
-          // A follow that goes on through pauses doesn't end at them, so the pause ends the wait.
-          ...(out.ended && { reacting: false }),
-        }
-      }),
+        if (seq !== null) noteSeq(turnId, seq)
+        patch(turnId, (t) => {
+          if (!t.review) return {}
+          const out = applyEvent(t.review, ev)
+          return {
+            review: out.view,
+            // The same line again (the agent repeats it) is no change.
+            ...(out.progress !== undefined && !sameProgress(out.progress, t.progress) && { progress: out.progress }),
+            // A follow that goes on through pauses doesn't end at them, so the pause ends the wait.
+            ...(out.ended && { reacting: false }),
+          }
+        })
+      },
       // A polled view carries the newest event id when it was read (older agents didn't).
-      onPoll: (view) => patch(turnId, (t) => ({
-        review: view, progress: null,
-        ...(view.lastEventId === undefined ? { seqBehind: true } : { lastSeq: Math.max(t.lastSeq, view.lastEventId), seqBehind: false }),
-      })),
+      onPoll: (view) => {
+        if (view.lastEventId !== undefined) noteSeq(turnId, view.lastEventId)
+        patch(turnId, () => ({ review: view, progress: null, seqBehind: view.lastEventId === undefined }))
+      },
       onGone: () => patch(turnId, (t) => ({ review: t.review && { ...t.review, status: "failed", error: GONE }, progress: null })),
     }).finally(() => {
       if (follows.current.get(turnId) !== ctrl) return // a newer follow took over, or the page closed
       follows.current.delete(turnId)
       patch(turnId, () => ({ reacting: false }))
     })
-  }, [patch])
+  }, [patch, noteSeq])
 
   useEffect(() => {
     let active = true // this run of the effect (strict mode runs it twice)
     alive.current = true
-    apiClient.get<SavedIdea[]>("/ideas/user").then((r) => setIdeas(r.data)).catch(() => setIdeas([]))
-    apiClient.get<{ profileCompletion?: number }>("/founder/profile").then((r) => setProfileDone(r.data.profileCompletion ?? 0)).catch(() => {})
-    apiClient.get<{ joined: boolean }>("/founder/review-waitlist").then((r) => setWaitlist(r.data.joined)).catch(() => setWaitlist(null))
+    cachedGet<SavedIdea[]>("/ideas/user", setIdeas).catch(() => setIdeas([]))
+    cachedGet<{ profileCompletion?: number }>("/founder/profile", (p) => setProfileDone(p.profileCompletion ?? 0)).catch(() => {})
+    const early = agentWasLive ? reviewsApi.latest() : null
+    early?.catch(() => {}) // used below once the status is in
     reviewsApi.status().then((st) => {
       if (!active) return
       setLive(st)
+      agentWasLive = st.live
       if (st.live && "quota" in st && st.quota) setQuota(st.quota)
-      if (!st.live) return
+      if (!st.live) {
+        // "Tell me when it's live" only shows while it isn't.
+        apiClient.get<{ joined: boolean }>("/founder/review-waitlist").then((r) => setWaitlist(r.data.joined)).catch(() => setWaitlist(null))
+        return
+      }
       // A review still running or waiting for reactions comes back after a reload.
-      reviewsApi.latest().then((v) => {
+      ;(early ?? reviewsApi.latest()).then((v) => {
         if (!active || !v || (v.status !== "running" && v.status !== "awaiting_reaction")) return
         const id = Date.now()
         const known = v.lastEventId
+        seqs.current.set(id, known ?? 0)
         setTurns([{ id, text: v.brief?.oneLiner ?? "Your last review", idea: null, readers: v.readers, overlaps: null, error: null,
           review: v, progress: v.status === "running" ? { stage: "reading", text: "Picking up where it left off." } : null,
-          general: null, reviewError: null, lastSeq: known ?? 0, seqBehind: known === undefined, reacting: false, restored: true }])
+          general: null, reviewError: null, seqBehind: known === undefined, reacting: false, restored: true }])
         // The view carries the newest event id: a running review resumes after it, and one that
         // waits for the founder is followed again when they react. Without an id (an older agent),
         // replay from the start through the old pauses.
@@ -194,7 +227,7 @@ export default function SomethingPage() {
           for (let i = 0; i + 1 < msgs.length; i += 2) {
             if (msgs[i].role !== "founder" || msgs[i + 1].role !== "something") continue
             pairs.push({ id: id + i + 1, text: msgs[i].text, idea: null, readers: [], overlaps: null, error: null, review: null, progress: null,
-              general: null, reviewError: null, lastSeq: 0, reacting: false, chat: { reply: msgs[i + 1].text } })
+              general: null, reviewError: null, reacting: false, chat: { reply: msgs[i + 1].text } })
           }
           if (pairs.length) setTurns((all) => [...all, ...pairs])
         }).catch(() => {})
@@ -209,23 +242,32 @@ export default function SomethingPage() {
     }
   }, [follow])
 
+  // Follow the conversation to its end when a turn is added, or as a reply grows while the
+  // founder is already at the end. Reading further up, they stay where they are.
+  const nearEnd = useRef(true)
+  const shownTurns = useRef(0)
   useEffect(() => {
-    if (turns.length) endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })
+    const onScroll = () => {
+      nearEnd.current = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 160
+    }
+    window.addEventListener("scroll", onScroll, { passive: true })
+    return () => window.removeEventListener("scroll", onScroll)
+  }, [])
+  useEffect(() => {
+    const added = turns.length > shownTurns.current
+    shownTurns.current = turns.length
+    if (turns.length && (added || nearEnd.current)) endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })
   }, [turns])
-
-  const canSend = !busy && (Boolean(picked) || text.trim().length > 0)
 
   // The newest review on screen: typed text after it goes to Something's chat first.
   const lastReview = [...turns].reverse().find((t) => t.review && t.review.status !== "failed")?.review ?? null
 
-  const send = async () => {
-    if (!canSend) return
+  const send = async (typed: string) => {
+    if (busy || (!picked && !typed)) return
     const id = Date.now()
-    const typed = text.trim()
     const base: Turn = { id, text: picked ? picked.title : typed, idea: picked, readers, overlaps: null, error: null,
-      review: null, progress: null, general: null, reviewError: null, lastSeq: 0, reacting: false }
+      review: null, progress: null, general: null, reviewError: null, reacting: false }
     markTriedSomething()
-    setText("")
     setPicked(null)
     if (live?.live && lastReview && !picked) {
       setTurns((t) => [...t, { ...base, chat: { reply: null } }])
@@ -283,7 +325,8 @@ export default function SomethingPage() {
       await reviewsApi.react(turn.review.reviewId, reaction)
       // A follow still open (a review brought back after a reload) carries the reply by itself.
       // Otherwise resume after the newest event applied, through replayed pauses if that may be behind.
-      if (!follows.current.has(turn.id)) follow(turn.id, turn.review.reviewId, turn.lastSeq, turn.seqBehind ? Infinity : turn.lastSeq)
+      const last = seqs.current.get(turn.id) ?? 0
+      if (!follows.current.has(turn.id)) follow(turn.id, turn.review.reviewId, last, turn.seqBehind ? Infinity : last)
     } catch (err) {
       patch(turn.id, () => ({ reacting: false, progress: null, reviewError: apiError(err, "That didn't save. Please try again.") }))
     }
@@ -301,14 +344,11 @@ export default function SomethingPage() {
 
   const composer = (
     <Composer
-      text={text}
-      setText={setText}
       picked={picked}
       setPicked={setPicked}
       ideas={ideas}
       readers={readers}
       setReaders={setReaders}
-      canSend={canSend}
       onSend={send}
       busy={busy}
       compact={turns.length > 0}
@@ -385,34 +425,36 @@ export default function SomethingPage() {
 
 /* ------------------------------------------------------------------------------------------------ */
 
+/** The input, with its own text: typing re-renders only this, not the conversation above. */
 function Composer({
-  text,
-  setText,
   picked,
   setPicked,
   ideas,
   readers,
   setReaders,
-  canSend,
   onSend,
   busy,
   compact,
   placeholder,
 }: {
-  text: string
-  setText: (v: string) => void
   picked: SavedIdea | null
   setPicked: (v: SavedIdea | null) => void
   ideas: SavedIdea[]
   readers: Reader[]
   setReaders: (v: Reader[]) => void
-  canSend: boolean
-  onSend: () => void
+  onSend: (text: string) => void
   busy: boolean
   compact: boolean
   placeholder?: string
 }) {
   const ref = useRef<HTMLTextAreaElement>(null)
+  const [text, setText] = useState("")
+  const canSend = !busy && (Boolean(picked) || text.trim().length > 0)
+  const send = () => {
+    if (!canSend) return
+    onSend(text.trim())
+    setText("")
+  }
 
   // Grow with the text, up to a limit.
   useEffect(() => {
@@ -448,7 +490,7 @@ function Composer({
             value={text}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); onSend() }
+              if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send() }
             }}
             rows={compact ? 1 : 3}
             maxLength={2000}
@@ -481,7 +523,7 @@ function Composer({
           ) : <span />}
           <button
             type="button"
-            onClick={onSend}
+            onClick={send}
             disabled={!canSend}
             aria-label={busy ? "Checking" : "Ask"}
             className="grid size-9 shrink-0 place-items-center rounded-full bg-foreground text-background transition-opacity disabled:opacity-25 cursor-pointer disabled:cursor-not-allowed"

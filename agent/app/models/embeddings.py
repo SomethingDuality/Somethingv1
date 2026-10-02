@@ -45,14 +45,13 @@ async def embed(texts: list[str], *, task: str = "retrieval.passage", ctx: dict 
         raise ProviderUnavailable("JINA_API_KEY is not set")
     started = time.monotonic()
     try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            res = await client.post(
-                "https://api.jina.ai/v1/embeddings",
-                headers={"Authorization": f"Bearer {s.jina_api_key}"},
-                json={"model": s.embedding_model, "task": task, "dimensions": s.embedding_dims, "input": texts},
-            )
-            res.raise_for_status()
-            data = res.json()
+        res = await _http().post(
+            "https://api.jina.ai/v1/embeddings",
+            headers={"Authorization": f"Bearer {s.jina_api_key}"},
+            json={"model": s.embedding_model, "task": task, "dimensions": s.embedding_dims, "input": texts},
+        )
+        res.raise_for_status()
+        data = res.json()
     except httpx.HTTPError as e:
         await usage.record(ctx or {}, provider="jina", model=s.embedding_model, outcome="error", error_class=type(e).__name__)
         raise ProviderUnavailable(f"jina embeddings: {type(e).__name__}") from e
@@ -65,6 +64,24 @@ async def embed(texts: list[str], *, task: str = "retrieval.passage", ctx: dict 
         n = np.linalg.norm(v)
         out.append(v / n if n else v)
     return out
+
+
+# One connection pool for the process (a client per call cost ~7 ms of CPU and a TLS handshake).
+_client: httpx.AsyncClient | None = None
+
+
+def _http() -> httpx.AsyncClient:
+    global _client
+    if _client is None or _client.is_closed:
+        _client = httpx.AsyncClient(timeout=20)
+    return _client
+
+
+async def close() -> None:
+    global _client
+    if _client is not None:
+        await _client.aclose()
+        _client = None
 
 
 def cosine_many(query: np.ndarray, matrix: np.ndarray) -> np.ndarray:

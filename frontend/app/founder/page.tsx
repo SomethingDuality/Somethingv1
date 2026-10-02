@@ -4,7 +4,9 @@ import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import apiClient from "@/lib/axios"
+import { cached, cachedGet } from "@/lib/api-cache"
 import { useAuth } from "@/components/auth-provider"
+import { useNotifications } from "@/components/community/inbox-provider"
 import { Aside, Main, Page, PageTitle, Section, Split, countOf, greeting, pillClass, quietLinkClass, relativeTime, usd } from "@/components/shell/page"
 import { GettingStarted, type Step } from "@/components/shell/getting-started"
 import { labelFor } from "@/lib/taxonomy"
@@ -30,7 +32,6 @@ type Idea = {
   createdAt?: string
   milestones?: { status: "open" | "done" }[]
 }
-type Notification = { id: string; text: string; timestamp: string; read: boolean }
 type Overview = {
   kpis: { ideas: number; teamMembers: number }
   totals: { committed: number; released: number; investors: number }
@@ -55,15 +56,15 @@ const ACTIVITY_DOT: Record<string, string> = {
  */
 export default function FounderHome() {
   const { user } = useAuth()
-  const router = useRouter()
-  const [draft, setDraft] = useState("")
-  const [ideas, setIdeas] = useState<Idea[] | null>(null)
-  const [notes, setNotes] = useState<Notification[] | null>(null)
+  // Ideas and the profile paint from what this tab already has (lib/api-cache), then refresh.
+  const [ideas, setIdeas] = useState<Idea[] | null>(() => cached<Idea[]>("/ideas/user") ?? null)
   const [overview, setOverview] = useState<Overview | null>(null)
   const [overviewFailed, setOverviewFailed] = useState(false)
-  const [profile, setProfile] = useState<Profile | null>(null)
+  const [profile, setProfile] = useState<Profile | null>(() => cached<Profile>("/founder/profile") ?? null)
   const [triedSomething, setTriedSomething] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // The shell's one notifications list (also behind the sidebar's Notifications menu).
+  const notes = useNotifications()
 
   const loadOverview = useCallback(() => {
     setOverviewFailed(false)
@@ -71,24 +72,28 @@ export default function FounderHome() {
   }, [])
 
   useEffect(() => {
-    apiClient.get<Idea[]>("/ideas/user").then((r) => setIdeas(r.data)).catch((err) => {
-      setIdeas([])
-      setError(apiError(err, "Couldn't load your ideas."))
-    })
-    apiClient.get<Notification[]>("/notifications").then((r) => setNotes(r.data)).catch(() => setNotes([]))
+    // A failed first load says so; a failed refresh keeps the list on screen.
+    const loadIdeas = (first: boolean) =>
+      cachedGet<Idea[]>("/ideas/user", setIdeas).catch((err) => {
+        if (!first) return
+        setIdeas([])
+        setError(apiError(err, "Couldn't load your ideas."))
+      })
+    const loadProfile = () => cachedGet<Profile>("/founder/profile", setProfile).catch(() => setProfile(null))
+    loadIdeas(true)
+    loadProfile()
     loadOverview()
     // Answers from the Something box land on the profile and ideas; refresh what depends on them.
     const refresh = () => {
-      apiClient.get<Profile>("/founder/profile").then((r) => setProfile(r.data)).catch(() => setProfile(null))
-      apiClient.get<Idea[]>("/ideas/user").then((r) => setIdeas(r.data)).catch(() => {})
+      loadProfile()
+      loadIdeas(false)
     }
-    refresh()
     window.addEventListener("profile:updated", refresh)
     try { setTriedSomething(localStorage.getItem(TRIED_SOMETHING_KEY) === "1") } catch { /* private mode */ }
     return () => window.removeEventListener("profile:updated", refresh)
   }, [loadOverview])
 
-  const needsYou = notes?.filter((n) => !n.read) ?? null
+  const needsYou = notes.items ? notes.items.filter((n) => !n.read) : notes.error ? [] : null
   const teammates = overview?.team.filter((m) => !m.isYou) ?? []
   // Without this the team and activity would show skeletons forever.
   const overviewMissing = (what: string) => overviewFailed && !overview ? (
@@ -115,11 +120,6 @@ export default function FounderHome() {
     { label: "Talk an idea through with Something", href: "/founder/something", done: triedSomething },
   ] : []
 
-  const continueToPost = () => {
-    saveIdeaDraft(draft.trim())
-    router.push("/founder/ideas?new=true")
-  }
-
   return (
     <Page>
       <PageTitle title={greeting(user?.name)}>{summary}</PageTitle>
@@ -127,25 +127,7 @@ export default function FounderHome() {
       {/* Phones: box → Needs you → ideas. Laptops: box and ideas on the left, Needs you on the right. */}
       <Split className="mt-12">
         <Main>
-          <form onSubmit={(e) => { e.preventDefault(); continueToPost() }}>
-            <label htmlFor="idea-draft" className="block text-lg text-foreground">What are you working on?</label>
-            <textarea
-              id="idea-draft"
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              rows={3}
-              maxLength={500}
-              placeholder="A sentence or two is enough. You can add details later."
-              className="mt-4 w-full resize-none rounded-xl border border-input bg-transparent px-4 py-3 text-base leading-relaxed text-foreground placeholder:text-muted-foreground focus:border-muted-foreground focus:outline-none xl:min-h-32"
-            />
-            <IdeaPrivacyNote className="mt-2" />
-            <div className="mt-4 flex items-center gap-5">
-              <button type="submit" className={pillClass}>
-                {draft.trim() ? "Continue" : "Post an idea"}
-              </button>
-              <Link href="/founder/something" className={quietLinkClass}>Talk it through with Something first</Link>
-            </div>
-          </form>
+          <DraftBox />
         </Main>
 
         <Aside>
@@ -263,5 +245,38 @@ export default function FounderHome() {
         </Main>
       </Split>
     </Page>
+  )
+}
+
+/** "What are you working on?": its own component, so typing doesn't re-render the whole home page. */
+function DraftBox() {
+  const router = useRouter()
+  const [draft, setDraft] = useState("")
+
+  const continueToPost = () => {
+    saveIdeaDraft(draft.trim())
+    router.push("/founder/ideas?new=true")
+  }
+
+  return (
+    <form onSubmit={(e) => { e.preventDefault(); continueToPost() }}>
+      <label htmlFor="idea-draft" className="block text-lg text-foreground">What are you working on?</label>
+      <textarea
+        id="idea-draft"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        rows={3}
+        maxLength={500}
+        placeholder="A sentence or two is enough. You can add details later."
+        className="mt-4 w-full resize-none rounded-xl border border-input bg-transparent px-4 py-3 text-base leading-relaxed text-foreground placeholder:text-muted-foreground focus:border-muted-foreground focus:outline-none xl:min-h-32"
+      />
+      <IdeaPrivacyNote className="mt-2" />
+      <div className="mt-4 flex items-center gap-5">
+        <button type="submit" className={pillClass}>
+          {draft.trim() ? "Continue" : "Post an idea"}
+        </button>
+        <Link href="/founder/something" className={quietLinkClass}>Talk it through with Something first</Link>
+      </div>
+    </form>
   )
 }

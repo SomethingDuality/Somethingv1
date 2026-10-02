@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 from app.api import sse
 from app.api.deps import Caller, require_user, service
-from app.core import db
+from app.core.runs import manager
 from app.review import service as reviews
 from app.review import store
 
@@ -51,8 +51,7 @@ async def _with_last_event(doc: dict, seq: int) -> dict:
 
 
 async def _seq(review_id: str) -> int:
-    run = await db.col("agent_runs").find_one({"_id": review_id}, {"seq": 1})
-    return int((run or {}).get("seq") or 0)
+    return await manager.last_seq(review_id)
 
 
 @router.get("/latest")

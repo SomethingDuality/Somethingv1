@@ -7,6 +7,7 @@ recall()  current notes only; rank = reciprocal-rank fusion of cosine and keywor
 known()   the current value of a slot, no decay ("check the store first" before asking).
 Reinforcement happens only when a note is cited (store.cite), never because it was retrieved.
 """
+import asyncio
 import math
 import re
 from collections import Counter
@@ -59,13 +60,15 @@ def _decay(note: dict, now: datetime) -> float:
 
 async def recall(keys: list[str], query: str, *, k: int = 8, exclude_sources: tuple[str, ...] = (),
                  kinds: tuple[str, ...] | None = None, ctx: dict | None = None) -> list[dict]:
-    notes = [n for n in await store.current_notes(keys)
-             if n.get("source", {}).get("type") not in exclude_sources and (kinds is None or n.get("kind") in kinds)]
+    # The notes and the query's embedding are fetched together (one round trip off the path).
+    notes, [qv] = await asyncio.gather(
+        store.current_notes(keys, exclude_sources=exclude_sources, kinds=kinds),
+        embeddings.embed([query], task="retrieval.query", ctx=ctx),
+    )
     if not notes:
         return []
     now = datetime.now(timezone.utc)
     model = embeddings.model_name()
-    [qv] = await embeddings.embed([query], task="retrieval.query", ctx=ctx)
     cos = np.array([float(store.to_vec(n["embedding"]) @ qv) if n.get("embedding") is not None and n.get("embedding_model") == model else 0.0 for n in notes])
     kw = np.array(_bm25(query, [n["text"] for n in notes]))
     rank_cos = {i: r for r, i in enumerate(np.argsort(-cos))}
@@ -86,8 +89,8 @@ async def known(keys: list[str], slot_key: str) -> dict | None:
     oldest = datetime.min.replace(tzinfo=timezone.utc)
     for key in keys:  # most specific scope first
         # Options ("thinking about MVP") are never the value; only decided notes are.
-        notes = [n for n in await store.current_notes([key], embeddings=False)
-                 if n.get("slot_key") == slot_key and n.get("kind") != "option" and n.get("modality", "decided") == "decided"]
+        notes = [n for n in await store.current_notes([key], embeddings=False, slot_key=slot_key)
+                 if n.get("kind") != "option" and n.get("modality", "decided") == "decided"]
         if notes:
             notes.sort(key=lambda n: (TIER.get(n["provenance"], 0), parse_when(n.get("valid_at")) or oldest), reverse=True)
             return store.public(notes[0])

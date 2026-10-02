@@ -21,12 +21,14 @@ const tz = () => {
     return "UTC"
   }
 }
-const tzHeader = () => ({ "x-user-tz": tz() })
+// In the query, not an x-user-tz header: a custom header makes every GET (the status, the stream)
+// a CORS preflight first. Node reads either (agent.controller.js userOf).
+const tzParams = () => ({ tz: tz() })
 
 export const reviewsApi = {
-  status: () => apiClient.get<ReviewStatus>("/agent/reviews/status", { headers: tzHeader() }).then((r) => r.data).catch(() => ({ live: false })),
+  status: () => apiClient.get<ReviewStatus>("/agent/reviews/status", { params: tzParams() }).then((r) => r.data).catch(() => ({ live: false })),
   start: (body: { ideaId?: string; text?: string; readers: Reader[] }) =>
-    apiClient.post<StartResult>("/agent/reviews", body, { headers: tzHeader() }).then((r) => r.data),
+    apiClient.post<StartResult>("/agent/reviews", body, { params: tzParams() }).then((r) => r.data),
   get: (id: string) => apiClient.get<{ review: ReviewView }>(`/agent/reviews/${id}`).then((r) => r.data.review),
   latest: (ideaId?: string) =>
     apiClient.get<{ review: ReviewView | null }>("/agent/reviews/latest", { params: ideaId ? { ideaId } : {} }).then((r) => r.data.review),
@@ -53,6 +55,20 @@ const sleep = (ms: number, signal: AbortSignal) =>
     signal.addEventListener("abort", () => { clearTimeout(t); resolve() }, { once: true })
   })
 
+/** Resolves once the tab is visible (at once if it is), or when the follow is aborted. */
+const whenVisible = (signal: AbortSignal) =>
+  new Promise<void>((resolve) => {
+    if (typeof document === "undefined" || document.visibilityState === "visible") return resolve()
+    const done = () => {
+      document.removeEventListener("visibilitychange", check)
+      signal.removeEventListener("abort", done)
+      resolve()
+    }
+    const check = () => { if (document.visibilityState === "visible") done() }
+    document.addEventListener("visibilitychange", check)
+    signal.addEventListener("abort", done, { once: true })
+  })
+
 // A 4xx that a retry won't change: the review is gone or isn't the caller's (401 refreshes first).
 const gone = (status?: number) => status !== undefined && status >= 400 && status < 500 && status !== 401 && status !== 408 && status !== 429
 
@@ -63,8 +79,8 @@ export async function followReview(id: string, { after, known = after, onEvent, 
   let refreshed = false
   while (!signal.aborted && failures < 3) {
     try {
-      const res = await fetch(`${API_BASE_URL}/agent/reviews/${id}/stream?after=${last}`, {
-        credentials: "include", headers: { accept: "text/event-stream", ...tzHeader() }, signal,
+      const res = await fetch(`${API_BASE_URL}/agent/reviews/${id}/stream?after=${last}&tz=${encodeURIComponent(tz())}`, {
+        credentials: "include", headers: { accept: "text/event-stream" }, signal,
       })
       if (res.status === 401 && !refreshed) {
         try {
@@ -106,8 +122,11 @@ export async function followReview(id: string, { after, known = after, onEvent, 
     }
     if (failures < 3) await sleep(500 * 2 ** failures, signal)
   }
-  // Streaming kept failing: poll the stored view until the review stops running.
+  // Streaming kept failing: poll the stored view until the review stops running (not while the
+  // tab is in the background: the next look picks it up).
   while (!signal.aborted) {
+    await whenVisible(signal)
+    if (signal.aborted) break
     try {
       const view = await reviewsApi.get(id)
       onPoll(view)
@@ -169,7 +188,7 @@ export type ChatMessage = { role: "founder" | "something"; text: string; at: str
 
 export const chatApi = {
   turn: (body: { text: string; reviewId?: string; ideaId?: string }) =>
-    apiClient.post<ChatTurn>("/agent/chat", body, { headers: tzHeader() }).then((r) => r.data),
+    apiClient.post<ChatTurn>("/agent/chat", body, { params: tzParams() }).then((r) => r.data),
   history: (reviewId: string) =>
     apiClient.get<{ messages: ChatMessage[] }>("/agent/chat", { params: { reviewId } }).then((r) => r.data.messages),
 }

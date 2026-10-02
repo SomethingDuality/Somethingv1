@@ -1,11 +1,11 @@
 "use client"
 
-import { useCallback, useEffect, useRef, useState } from "react"
+import { memo, useCallback, useEffect, useRef, useState } from "react"
 import Link from "next/link"
 import { ArrowUp } from "lucide-react"
 import { inbox, newClientId, type Message, type Thread } from "@/lib/inbox-transport"
 import { useInbox } from "@/components/community/inbox-provider"
-import { ReportButton } from "@/components/community/report-dialog"
+import { ReportDialog } from "@/components/community/report-dialog"
 import { RevealDialog } from "@/components/chat/reveal-dialog"
 import { InviteDialog } from "@/components/chat/invite-dialog"
 import { quietLinkClass } from "@/components/shell/page"
@@ -16,7 +16,14 @@ import { apiError, cn } from "@/lib/utils"
 
 type Pending = { clientId: string; text: string; failed: boolean }
 
+// Every 4 s while messages are coming; 1.5 times longer after each quiet poll, up to 20 s. A
+// send, the window regaining focus, a new message or the inbox poll seeing chat activity goes
+// back to 4 s.
 const MESSAGES_POLL_MS = 4_000
+const MESSAGES_IDLE_MAX_MS = 20_000
+
+// The chat list shows a thread's last message the way the server shortens it (serialize.js).
+const excerpt = (s: string, n = 90) => (s.length > n ? `${s.slice(0, n - 1)}…` : s)
 
 /** One conversation: who it's with, the request or Ghost Mode banner, the messages, the composer. */
 export function ThreadView({ threadId, role, onThreadChange, onBack }: {
@@ -25,19 +32,19 @@ export function ThreadView({ threadId, role, onThreadChange, onBack }: {
   onThreadChange: (t: Thread) => void
   onBack: () => void
 }) {
-  const { refresh: refreshInbox } = useInbox()
+  const { summary, refresh: refreshInbox } = useInbox()
   const [thread, setThread] = useState<Thread | null>(null)
   const [messages, setMessages] = useState<Message[] | null>(null)
   const [missing, setMissing] = useState(false)
   const [pending, setPending] = useState<Pending[]>([])
-  const [text, setText] = useState("")
   const [revealOpen, setRevealOpen] = useState(false)
   const [revealing, setRevealing] = useState(false)
   const [confirmBlock, setConfirmBlock] = useState(false)
   const [inviteOpen, setInviteOpen] = useState(false)
   const [busy, setBusy] = useState(false)
+  // One report dialog for the whole conversation, opened for a message by id.
+  const [reportId, setReportId] = useState<string | null>(null)
   const endRef = useRef<HTMLDivElement>(null)
-  const areaRef = useRef<HTMLTextAreaElement>(null)
   // The poll cursor: the time of the newest message a fetch returned. Never our own send's time:
   // the server overlaps `after` by only 2 s, so a reply they sent just before ours would be skipped.
   const lastAt = useRef<string | undefined>(undefined)
@@ -78,35 +85,50 @@ export function ThreadView({ threadId, role, onThreadChange, onBack }: {
     return () => { live = false }
   }, [threadId, update, markRead])
 
-  // New messages every 4 s while the chat is open and the tab is visible.
-  usePoll(async () => {
-    if (!messages) return
+  // New messages while the chat is open and the tab is visible (see MESSAGES_POLL_MS).
+  const wake = usePoll(async () => {
+    if (!messages) return false
     const fresh = await inbox.messages(threadId, lastAt.current)
-    if (openId.current !== threadId) return // another chat was opened meanwhile
+    if (openId.current !== threadId) return false // another chat was opened meanwhile
     lastAt.current = fresh.at(-1)?.at ?? lastAt.current
     // The overlap returns some messages twice (and ours, already shown): keep one of each id.
     const known = new Set(messages.map((m) => m.id))
     const added = fresh.filter((m) => !known.has(m.id))
-    if (!added.length) return
+    if (!added.length) return false
     setMessages((cur) => [...(cur ?? []), ...added.filter((m) => !(cur ?? []).some((c) => c.id === m.id))])
-    // Something new from them can change the thread too (a reply accepts a request).
-    update({ ...(await inbox.thread(threadId)), unread: 0 })
+    // Something new from them can change the thread too (a reply accepts a request, an event
+    // closes it): ask for it then. A plain message in an open chat only moves its last line.
+    const last = added[added.length - 1]
+    if (thread?.status === "active" && added.every((m) => m.kind === "text")) {
+      update({ ...thread, lastMessage: { text: excerpt(last.text), at: last.at, mine: last.mine }, updatedAt: last.at, unread: 0 })
+    } else {
+      update({ ...(await inbox.thread(threadId)), unread: 0 })
+    }
     markRead()
-  }, MESSAGES_POLL_MS, { enabled: Boolean(messages) })
+    return true
+  }, MESSAGES_POLL_MS, { enabled: Boolean(messages), idleMaxMs: MESSAGES_IDLE_MAX_MS })
+
+  // Back to the quick poll when the window comes back, or when the inbox poll sees new chat activity.
+  useEffect(() => {
+    window.addEventListener("focus", wake)
+    return () => window.removeEventListener("focus", wake)
+  }, [wake])
+  const activity = summary?.chats.lastActivityAt
+  useEffect(() => {
+    if (activity) wake()
+  }, [activity, wake])
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ block: "end" })
+    const end = endRef.current
+    if (!end) return
+    end.scrollIntoView({ block: "end" })
+    // Messages far up are laid out at an estimated height until seen (content-visibility); if
+    // the ones coming into view settle taller, the second pass still ends at the bottom.
+    const frame = requestAnimationFrame(() => end.scrollIntoView({ block: "end" }))
+    return () => cancelAnimationFrame(frame)
   }, [messages, pending])
 
-  // The composer grows with the text, up to a limit.
-  useEffect(() => {
-    const el = areaRef.current
-    if (!el) return
-    el.style.height = "auto"
-    el.style.height = `${Math.min(el.scrollHeight, 160)}px`
-  }, [text])
-
-  const deliver = async (p: Pending) => {
+  const deliver = useCallback(async (p: Pending) => {
     setPending((cur) => cur.map((x) => (x.clientId === p.clientId ? { ...x, failed: false } : x)))
     try {
       const out = await inbox.send(threadId, p.text, p.clientId)
@@ -117,15 +139,14 @@ export function ThreadView({ threadId, role, onThreadChange, onBack }: {
       setPending((cur) => cur.map((x) => (x.clientId === p.clientId ? { ...x, failed: true } : x)))
       toast({ title: "Not sent", description: apiError(err, "Tap Retry to send it again."), variant: "destructive" })
     }
-  }
+  }, [threadId, update])
 
-  const send = () => {
-    const body = text.trim()
-    if (!body || !thread?.canSend) return
+  const send = (body: string) => {
+    if (!thread?.canSend) return
     const p = { clientId: newClientId(), text: body, failed: false }
     setPending((cur) => [...cur, p])
-    setText("")
     deliver(p)
+    wake() // a reply is likelier now
   }
 
   const act = async (fn: () => Promise<Thread>, done?: string) => {
@@ -206,36 +227,7 @@ export function ThreadView({ threadId, role, onThreadChange, onBack }: {
       )}
 
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-6" aria-live="polite">
-        <ol className="space-y-3">
-          {messages.map((m) => m.kind === "event" ? (
-            <li key={m.id} className="py-2 text-center text-[13px] text-muted-foreground">{m.text}</li>
-          ) : (
-            <li key={m.id} className={cn("group flex flex-col", m.mine ? "items-end" : "items-start")}>
-              <p className={cn(
-                "max-w-[80%] whitespace-pre-line break-words rounded-[20px] px-4 py-2.5 text-[15px] leading-relaxed",
-                m.mine ? "rounded-br-md bg-surface-2 text-foreground" : "rounded-bl-md border border-line text-foreground",
-              )}>
-                {m.text}
-              </p>
-              <span className="mt-1 flex items-center gap-3 px-1 text-[13px] text-muted-foreground">
-                {when(m.at)}
-                {!m.mine && <ReportButton type="message" id={m.id} className="text-[13px] opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100" />}
-              </span>
-            </li>
-          ))}
-          {pending.map((p) => (
-            <li key={p.clientId} className="flex flex-col items-end">
-              <p className={cn("max-w-[80%] whitespace-pre-line break-words rounded-[20px] rounded-br-md bg-surface-2 px-4 py-2.5 text-[15px] leading-relaxed", p.failed ? "text-muted-foreground" : "opacity-60")}>
-                {p.text}
-              </p>
-              <span className="mt-1 px-1 text-[13px] text-muted-foreground">
-                {p.failed ? (
-                  <>Not sent · <button type="button" onClick={() => deliver(p)} className="text-foreground underline underline-offset-4 cursor-pointer">Retry</button></>
-                ) : "Sending…"}
-              </span>
-            </li>
-          ))}
-        </ol>
+        <MessageList messages={messages} pending={pending} onRetry={deliver} onReport={setReportId} />
         <div ref={endRef} />
       </div>
 
@@ -251,21 +243,7 @@ export function ThreadView({ threadId, role, onThreadChange, onBack }: {
 
       <div className="border-t border-border p-4">
         {thread.canSend ? (
-          <form onSubmit={(e) => { e.preventDefault(); send() }} className="flex items-end gap-2 rounded-[24px] border border-line bg-surface py-1.5 pl-4 pr-1.5 focus-within:border-muted-foreground/60">
-            <textarea
-              ref={areaRef}
-              value={text}
-              onChange={(e) => setText(e.target.value.slice(0, 2000))}
-              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send() } }}
-              rows={1}
-              aria-label="Message"
-              placeholder={thread.status === "request_in" ? "Reply to accept" : "Write a message"}
-              className="block min-h-9 flex-1 resize-none bg-transparent py-1.5 text-base leading-relaxed text-foreground placeholder:text-muted-foreground focus:outline-none sm:text-[15px]"
-            />
-            <button type="submit" disabled={!text.trim()} aria-label="Send" className="grid size-9 shrink-0 place-items-center rounded-full bg-foreground text-background transition-opacity disabled:opacity-25 cursor-pointer disabled:cursor-not-allowed">
-              <ArrowUp className="size-4" />
-            </button>
-          </form>
+          <Composer placeholder={thread.status === "request_in" ? "Reply to accept" : "Write a message"} onSend={send} />
         ) : (
           <p className="px-1 text-[13px] text-muted-foreground">{thread.reason}</p>
         )}
@@ -282,6 +260,8 @@ export function ThreadView({ threadId, role, onThreadChange, onBack }: {
         />
       )}
 
+      <ReportDialog target={reportId ? { type: "message", id: reportId } : null} onClose={() => setReportId(null)} />
+
       <RevealDialog
         open={revealOpen}
         onOpenChange={setRevealOpen}
@@ -295,5 +275,93 @@ export function ThreadView({ threadId, role, onThreadChange, onBack }: {
         }}
       />
     </div>
+  )
+}
+
+/**
+ * The conversation itself. Memoized: typing in the composer or a dialog opening doesn't
+ * re-render hundreds of messages. Messages far off screen aren't laid out until scrolled near
+ * (content-visibility).
+ */
+const MessageList = memo(function MessageList({ messages, pending, onRetry, onReport }: {
+  messages: Message[]
+  pending: Pending[]
+  onRetry: (p: Pending) => void
+  onReport: (messageId: string) => void
+}) {
+  return (
+    <ol className="space-y-3">
+      {messages.map((m) => m.kind === "event" ? (
+        <li key={m.id} className="py-2 text-center text-[13px] text-muted-foreground [content-visibility:auto] [contain-intrinsic-size:auto_36px]">{m.text}</li>
+      ) : (
+        <li key={m.id} className={cn("group flex flex-col [content-visibility:auto] [contain-intrinsic-size:auto_68px]", m.mine ? "items-end" : "items-start")}>
+          <p className={cn(
+            "max-w-[80%] whitespace-pre-line break-words rounded-[20px] px-4 py-2.5 text-[15px] leading-relaxed",
+            m.mine ? "rounded-br-md bg-surface-2 text-foreground" : "rounded-bl-md border border-line text-foreground",
+          )}>
+            {m.text}
+          </p>
+          <span className="mt-1 flex items-center gap-3 px-1 text-[13px] text-muted-foreground">
+            {when(m.at)}
+            {!m.mine && (
+              <button type="button" onClick={() => onReport(m.id)} className={cn(quietLinkClass, "text-[13px] opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100")}>
+                Report
+              </button>
+            )}
+          </span>
+        </li>
+      ))}
+      {pending.map((p) => (
+        <li key={p.clientId} className="flex flex-col items-end">
+          <p className={cn("max-w-[80%] whitespace-pre-line break-words rounded-[20px] rounded-br-md bg-surface-2 px-4 py-2.5 text-[15px] leading-relaxed", p.failed ? "text-muted-foreground" : "opacity-60")}>
+            {p.text}
+          </p>
+          <span className="mt-1 px-1 text-[13px] text-muted-foreground">
+            {p.failed ? (
+              <>Not sent · <button type="button" onClick={() => onRetry(p)} className="text-foreground underline underline-offset-4 cursor-pointer">Retry</button></>
+            ) : "Sending…"}
+          </span>
+        </li>
+      ))}
+    </ol>
+  )
+})
+
+/** The message box, with its own text: typing doesn't re-render the conversation. */
+function Composer({ placeholder, onSend }: { placeholder: string; onSend: (text: string) => void }) {
+  const [text, setText] = useState("")
+  const areaRef = useRef<HTMLTextAreaElement>(null)
+
+  // The composer grows with the text, up to a limit.
+  useEffect(() => {
+    const el = areaRef.current
+    if (!el) return
+    el.style.height = "auto"
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`
+  }, [text])
+
+  const send = () => {
+    const body = text.trim()
+    if (!body) return
+    onSend(body)
+    setText("")
+  }
+
+  return (
+    <form onSubmit={(e) => { e.preventDefault(); send() }} className="flex items-end gap-2 rounded-[24px] border border-line bg-surface py-1.5 pl-4 pr-1.5 focus-within:border-muted-foreground/60">
+      <textarea
+        ref={areaRef}
+        value={text}
+        onChange={(e) => setText(e.target.value.slice(0, 2000))}
+        onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send() } }}
+        rows={1}
+        aria-label="Message"
+        placeholder={placeholder}
+        className="block min-h-9 flex-1 resize-none bg-transparent py-1.5 text-base leading-relaxed text-foreground placeholder:text-muted-foreground focus:outline-none sm:text-[15px]"
+      />
+      <button type="submit" disabled={!text.trim()} aria-label="Send" className="grid size-9 shrink-0 place-items-center rounded-full bg-foreground text-background transition-opacity disabled:opacity-25 cursor-pointer disabled:cursor-not-allowed">
+        <ArrowUp className="size-4" />
+      </button>
+    </form>
   )
 }

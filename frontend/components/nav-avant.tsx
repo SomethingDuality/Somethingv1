@@ -1,7 +1,6 @@
 "use client"
 
 import Link from "next/link"
-import Image from "next/image"
 import { useState, useEffect } from "react"
 import { cn } from "@/lib/utils"
 
@@ -49,13 +48,16 @@ export function NavAvant() {
           {/* Logo — TheThing mascot */}
           <Link href="/" className="flex items-center gap-2.5" aria-label="Something home">
             <div className="relative h-7 w-7 rounded-full overflow-hidden">
-              <Image
-                src="/thing-logo.png"
+              {/* A 96 px file (sharp at 2x and above), not the 1 MB original through the optimizer. */}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src="/thing-logo-96.webp"
                 alt="Thing — Something mascot"
-                fill
-                className="object-cover invert"
-                sizes="28px"
-                priority
+                width={28}
+                height={28}
+                fetchPriority="high"
+                decoding="async"
+                className="absolute inset-0 h-full w-full object-cover invert text-transparent"
               />
             </div>
             <span

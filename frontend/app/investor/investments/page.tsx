@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
-import apiClient from "@/lib/axios"
+import { cached, cachedGet } from "@/lib/api-cache"
 import { Aside, Main, Page, PageTitle, Section, Split, countOf, quietLinkClass, usd } from "@/components/shell/page"
 import { FounderCardButton, type FounderCardData } from "@/components/founder-card"
 import { ReleaseDialog, type ReleaseTarget } from "@/components/release-dialog"
@@ -39,20 +39,20 @@ type Saved = { _id: string; title: string; author?: string; stage?: string; tags
  * what they have released. Nothing moves money on Something yet; a release is a record.
  */
 export default function InvestorInvestmentsPage() {
-  const [portfolio, setPortfolio] = useState<PortfolioResponse | null>(null)
-  const [saved, setSaved] = useState<Saved[] | null>(null)
+  // What this tab already has shows at once (lib/api-cache); fetchAll checks it with the server.
+  const [portfolio, setPortfolio] = useState<PortfolioResponse | null>(() => cached<PortfolioResponse>("/investor/portfolio") ?? null)
+  const [saved, setSaved] = useState<Saved[] | null>(() => cached<{ ideas: Saved[] }>("/investor/watchlist")?.ideas ?? null)
   const [error, setError] = useState<string | null>(null)
   const [releasing, setReleasing] = useState<ReleaseTarget | null>(null)
 
-  const fetchAll = useCallback(async () => {
+  // `fresh` after a release: the cached portfolio is from before it.
+  const fetchAll = useCallback(async (fresh = false) => {
     setError(null)
     try {
-      const [p, w] = await Promise.all([
-        apiClient.get<PortfolioResponse>("/investor/portfolio"),
-        apiClient.get<{ ideas: Saved[] }>("/investor/watchlist"),
+      await Promise.all([
+        cachedGet<PortfolioResponse>("/investor/portfolio", setPortfolio, { fresh }),
+        cachedGet<{ ideas: Saved[] }>("/investor/watchlist", (w) => setSaved(w.ideas), { fresh }),
       ])
-      setPortfolio(p.data)
-      setSaved(w.data.ideas)
     } catch (err) {
       setPortfolio({ data: [], totalCommitted: 0, totalReleased: 0 })
       setSaved([])
@@ -92,7 +92,7 @@ export default function InvestorInvestmentsPage() {
           {error && (
             <div role="alert" className="mb-10 flex items-baseline gap-5">
               <p className="text-[15px] text-destructive">{error}</p>
-              <button type="button" onClick={fetchAll} className={quietLinkClass}>Retry</button>
+              <button type="button" onClick={() => fetchAll()} className={quietLinkClass}>Retry</button>
             </div>
           )}
 
@@ -187,7 +187,7 @@ export default function InvestorInvestmentsPage() {
         </Aside>
       </Split>
 
-      <ReleaseDialog target={releasing} onClose={() => setReleasing(null)} onDone={() => { setReleasing(null); fetchAll() }} />
+      <ReleaseDialog target={releasing} onClose={() => setReleasing(null)} onDone={() => { setReleasing(null); fetchAll(true) }} />
     </Page>
   )
 }

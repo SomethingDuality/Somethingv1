@@ -21,7 +21,7 @@ async def review(fake_node):
     import app.memory.fakes  # noqa: F401
     import app.review.fakes  # noqa: F401
     saver = checkpointer.saver()
-    manager.register("memory_write", compile_memory_write(saver))
+    manager.register("memory_write", compile_memory_write(saver), durability="exit")
     manager.register("review", compile_review(saver), on_finish=review_service.on_finish)
     fake_node.add_user(USER, "Founder")
     fake_node.add_idea(IDEA, USER, title="Late night meals", description=TEXT)

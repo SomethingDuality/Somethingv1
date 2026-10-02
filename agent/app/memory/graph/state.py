@@ -43,6 +43,7 @@ class MemoryWriteState(TypedDict):
     commit_attempts: int                       # incremented only in commit_node
     embedding: NotRequired[list[float]]
     embedding_model: NotRequired[str]
+    embedded_text_key: NotRequired[str]        # the text the embedding was made for (store.text_key)
     neighbours: NotRequired[list[dict]]
     scope_version: NotRequired[int]
     judgements: NotRequired[Annotated[list[dict], merge_judgements]]

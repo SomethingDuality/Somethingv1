@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react"
 import Link from "next/link"
-import apiClient from "@/lib/axios"
+import { cached, cachedGet } from "@/lib/api-cache"
 import { Section } from "@/components/shell/page"
 import { IdeaCover } from "@/components/visual/idea-cover"
 import { SkeletonRows } from "@/components/visual/skeleton"
@@ -15,28 +15,32 @@ type Range = "week" | "all"
  * What people back most (community C4): ideas by supporters, problems by votes, this week or
  * all time. Counts only, never who; no points or prizes (the competition is parked, F10).
  */
-export function LeaderboardCard({ kind, role, title, sectors, className }: {
+export function LeaderboardCard({ kind, role, title, sectors, enabled = true, className }: {
   kind: "ideas" | "problems"
   role: "founder" | "investor"
   title: string
   /** Ideas only: limit to these sectors (e.g. the investor's). */
   sectors?: string[]
+  /** False while the sectors are still loading: shows the loading rows without asking twice. */
+  enabled?: boolean
   className?: string
 }) {
   const [range, setRange] = useState<Range>("week")
-  const [rows, setRows] = useState<Row[] | null>(null)
   const sectorKey = (sectors ?? []).join(",")
+  const qs = new URLSearchParams({ window: range, limit: "5" })
+  if (kind === "ideas" && sectorKey) qs.set("sectors", sectorKey)
+  const url = `/leaderboards/${kind}?${qs}`
+  // What this tab already has for this board shows at once (lib/api-cache), then refreshes.
+  const [rows, setRows] = useState<Row[] | null>(() => (enabled ? cached<Row[]>(url) ?? null : null))
 
   useEffect(() => {
+    if (!enabled) return
     let live = true
-    setRows(null)
-    const qs = new URLSearchParams({ window: range, limit: "5" })
-    if (kind === "ideas" && sectorKey) qs.set("sectors", sectorKey)
-    apiClient.get<Row[]>(`/leaderboards/${kind}?${qs}`)
-      .then((r) => { if (live) setRows(r.data) })
+    setRows(cached<Row[]>(url) ?? null)
+    cachedGet<Row[]>(url, (data) => { if (live) setRows(data) })
       .catch(() => { if (live) setRows([]) })
     return () => { live = false }
-  }, [kind, range, sectorKey])
+  }, [url, enabled])
 
   const hrefFor = (r: Row) =>
     kind === "problems" ? `/${role}/problems?p=${r.id}`

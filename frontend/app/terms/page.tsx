@@ -1,14 +1,12 @@
-"use client"
-
 import Link from "next/link"
 import { Page } from "@/components/shell/page"
-import { Wordmark, useInteriorTheme } from "@/components/shell/app-shell"
+import { InteriorTheme, Wordmark } from "@/components/shell/wordmark"
 
+// A server component: the text ships as HTML, and only the wordmark and the theme switch are client code.
 export default function TermsPage() {
-  useInteriorTheme()
-
   return (
     <div className="min-h-dvh bg-background text-foreground px-5 pt-8 pb-24 md:px-12">
+      <InteriorTheme />
       <Wordmark href="/" />
       <Page width="reading" className="mt-20 md:mt-28">
         <h1 className="text-[32px] leading-[1.15] text-foreground">Terms</h1>

@@ -12,8 +12,10 @@ export function Avatar({ name, src, size = 32, className }: { name: string; src?
       aria-hidden="true"
     >
       {src ? (
+        // Lazy and off the main thread: a long list of cards has one per founder. The size is the
+        // circle's, so nothing moves when it arrives.
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={assetUrl(src)} alt="" className="h-full w-full object-cover" />
+        <img src={assetUrl(src)} alt="" width={size} height={size} loading="lazy" decoding="async" className="h-full w-full object-cover" />
       ) : (
         initials(name)
       )}

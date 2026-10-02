@@ -14,6 +14,7 @@ Rules this file enforces:
 """
 import time
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Literal, TypeVar
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -79,6 +80,9 @@ def _messages(prompt: Prompt, provider: str):
     return [system, HumanMessage(content=prompt.user)]
 
 
+# One client per distinct configuration, kept for the process: building one costs 13-35 ms of
+# CPU on the event loop (measured for ChatGroq) and a new TLS connection per call.
+@lru_cache(maxsize=64)
 def _client(provider: str, model: str, max_tokens: int, effort: str | None, temperature: float | None):
     s = get_settings()
     if provider == "anthropic":
@@ -104,11 +108,27 @@ def _client(provider: str, model: str, max_tokens: int, effort: str | None, temp
     raise ValueError(f"unknown provider {provider}")
 
 
+# A free provider that just timed out or was overloaded goes to the back of its chain for a while:
+# otherwise every call pays its FREE_TIMEOUT (15 s) again before failing over.
+COOLDOWN_S = 60.0
+_cooling: dict[str, float] = {}
+
+
+def _is_outage(e: Exception) -> bool:
+    status = getattr(e, "status_code", None) or getattr(getattr(e, "response", None), "status_code", None)
+    if isinstance(status, int) and (status == 429 or status >= 500):
+        return True
+    name = type(e).__name__
+    return any(k in name for k in ("Timeout", "Connect", "RateLimit", "Overloaded", "ServiceUnavailable"))
+
+
 def _route(tier: Tier, user_text: bool) -> list[tuple[str, str]]:
     if tier in ("haiku", "sonnet", "opus"):
         return [("anthropic", _claude_model(tier))]
     allowed = get_settings().user_text_provider_set
     chain = [(p, m) for p, m in CHAINS[tier] if _has_key(p) and (not user_text or p in allowed)]
+    now = time.monotonic()
+    chain.sort(key=lambda pm: _cooling.get(pm[0], 0.0) > now)  # stable: healthy ones keep their order
     # Last resort, and the only route when no free provider is configured: Claude Haiku.
     if _has_key("anthropic"):
         chain.append(("anthropic", _claude_model("haiku")))
@@ -164,6 +184,8 @@ async def _run(prompt: Prompt, schema, *, tier: Tier, ctx: dict, user_text: bool
             causes.append(f"{provider}/{model}: {type(e).__name__}")
             warn("llm.failover", prompt=prompt.id, provider=provider, model=model, error=type(e).__name__)
             await usage.record(ctx, provider=provider, model=model, outcome="failover", error_class=type(e).__name__)
+            if provider != "anthropic" and _is_outage(e):
+                _cooling[provider] = time.monotonic() + COOLDOWN_S
             if tier in ("haiku", "sonnet", "opus"):
                 if isinstance(e, Unusable):
                     raise  # cut off or unparseable: not an outage, so not retried by the graph either

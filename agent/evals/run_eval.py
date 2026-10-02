@@ -48,7 +48,7 @@ async def run(names: list[str], limit: int | None, replicates: int, out_dir: Pat
         await db.db()[name].delete_many({})
     node = FakeNode(key=None)
     node_client.set_transport(node.transport())
-    manager.register("memory_write", compile_memory_write(checkpointer.saver()))
+    manager.register("memory_write", compile_memory_write(checkpointer.saver()), durability="exit")
 
     reports = {}
     out_dir.mkdir(parents=True, exist_ok=True)

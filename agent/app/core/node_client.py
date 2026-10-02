@@ -1,6 +1,8 @@
 """Calls to Node's internal listener (127.0.0.1:5051). Node owns users and ideas: the agent reads
 them through `context` and changes them only through `apply_update`, which records
 fieldSources.<field>.source = 'agent' (one write path, with provenance)."""
+import time
+
 import httpx
 
 from app.core.errors import NodeUnavailable, NotFound
@@ -24,6 +26,7 @@ def _http() -> httpx.AsyncClient:
 def set_transport(transport: httpx.AsyncBaseTransport | None) -> None:
     """Tests swap in a fake Node."""
     global _client
+    _review_contexts.clear()
     s = get_settings()
     _client = httpx.AsyncClient(
         base_url=s.node_internal_url,
@@ -47,11 +50,29 @@ async def _call(method: str, path: str, **kw) -> dict:
     return res.json() if res.content else {}
 
 
+# A review asks for the same context twice within a second (the ownership check when it starts,
+# then load_node). Review contexts are kept for a few seconds; memory reads ("memory" purpose)
+# never use this, since they compare against values that may have just changed.
+REVIEW_CONTEXT_TTL = 10.0
+_review_contexts: dict[tuple[str, str | None], tuple[float, dict]] = {}
+
+
 async def context(user_id: str, *, idea_id: str | None = None, purpose: str = "review") -> dict:
+    key = (user_id, idea_id)
+    if purpose == "review":
+        hit = _review_contexts.get(key)
+        if hit and hit[0] > time.monotonic():
+            return hit[1]
     params = {"purpose": purpose}
     if idea_id:
         params["ideaId"] = idea_id
-    return await _call("GET", f"/internal/context/{user_id}", params=params)
+    out = await _call("GET", f"/internal/context/{user_id}", params=params)
+    if purpose == "review":
+        now = time.monotonic()
+        for k in [k for k, (until, _) in _review_contexts.items() if until <= now]:
+            _review_contexts.pop(k, None)
+        _review_contexts[key] = (now + REVIEW_CONTEXT_TTL, out)
+    return out
 
 
 async def apply_update(user_id: str, patch: dict, *, entity: str = "user", entity_id: str | None = None, ref: str | None = None) -> dict:
@@ -95,6 +116,7 @@ async def health() -> dict:
 
 async def close() -> None:
     global _client
+    _review_contexts.clear()
     if _client is not None:
         await _client.aclose()
         _client = None
