@@ -19,3 +19,37 @@ __pycache__/
 
 # Eval reports (synthetic data, regenerated per run)
 agent/evals/results/
+
+# The ML models (recommendation / matching research) stay private: never pushed to the public repo.
+recsys/
+
+# Private working notes stay out of the public repo too: the handoff and ledgers (chat/), and the
+# research behind the product (research_notes/). Both stay on disk for local use.
+chat/
+research_notes/
+
+# Only code is kept in the repo (Somay, 2026-10-02): design diagrams, reports, editor and tool
+# settings, local infra, helper scripts and an unused root manifest stay on disk, out of git.
+reports/
+SO0.excalidraw
+SO1.excalidraw
+SO2.mermaid
+.claude/
+docker-compose.yml
+commit_46.py
+/package.json
+/package-lock.json
+# Leftover images and files nothing in the app uses.
+frontend/MULTIPLE
+frontend/TheThing.png
+frontend/public/TheThing.png
+frontend/public/thing-logo.png
+frontend/public/ththingwhite.png
+frontend/public/file.svg
+frontend/public/globe.svg
+frontend/public/next.svg
+frontend/public/vercel.svg
+frontend/public/window.svg
+
+# The create-next-app default README (the root README covers the frontend).
+frontend/README.md
