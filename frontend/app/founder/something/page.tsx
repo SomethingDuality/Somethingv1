@@ -11,7 +11,7 @@ import { IdeaCover } from "@/components/visual/idea-cover"
 import { SectorList } from "@/components/visual/idea-card"
 import { markTriedSomething } from "@/lib/first-run"
 import {
-  applyEvent, chatApi, followReview, initialView, reviewsApi,
+  applyEvent, chatApi, followReview, initialView, reviewsApi, seqOf,
   type Progress, type Quota, type Reaction, type ReviewStatus, type ReviewView,
 } from "@/lib/agent-transport"
 import { NothingReply, ReviewProgress, SomethingReply } from "@/components/something/review-replies"
@@ -52,7 +52,10 @@ type Turn = {
   /** Something's answer when the message wasn't an idea ("hi"). */
   general: string | null
   reviewError: string | null
+  /** The id of the newest stream event applied to `review`. */
   lastSeq: number
+  /** `lastSeq` may be behind the agent's newest event (brought back after a reload, or polled). */
+  seqBehind?: boolean
   reacting: boolean
   /** Brought back after a reload: the checks below weren't run for it. */
   restored?: boolean
@@ -101,6 +104,7 @@ const READERS: Record<Reader, {
   },
 }
 const EXAMPLE_IDEA = "Late-night meals for college hostels"
+const GONE = { code: "not_found", message: "This review isn't available any more.", retryable: false }
 
 export default function SomethingPage() {
   useJustInTimeQuestion("ai_review")
@@ -117,45 +121,75 @@ export default function SomethingPage() {
   const [quota, setQuota] = useState<Quota | null>(null)
   const endRef = useRef<HTMLDivElement>(null)
   const follows = useRef(new Map<number, AbortController>())
+  // False once the page is gone: a review started or reacted to just before leaving opens no stream.
+  const alive = useRef(true)
 
   const patch = useCallback((id: number, f: (t: Turn) => Partial<Turn>) => {
     setTurns((all) => all.map((t) => (t.id === id ? { ...t, ...f(t) } : t)))
   }, [])
 
-  // Follow a review's stream from `after` until it pauses for the founder, finishes or fails.
-  const follow = useCallback((turnId: number, reviewId: string, after: number) => {
+  // Follow a review's stream from `after` until it pauses for the founder (a pause newer than
+  // `known`, see endsFollow), finishes or fails.
+  const follow = useCallback((turnId: number, reviewId: string, after: number, known = after) => {
+    if (!alive.current) return
     follows.current.get(turnId)?.abort()
     const ctrl = new AbortController()
     follows.current.set(turnId, ctrl)
     followReview(reviewId, {
       after,
+      known,
       signal: ctrl.signal,
       onEvent: (ev) => patch(turnId, (t) => {
         if (!t.review) return {}
         const out = applyEvent(t.review, ev)
-        return { review: out.view, ...(out.progress !== undefined && { progress: out.progress }), lastSeq: ev.id ? Number(ev.id) : t.lastSeq }
+        const seq = seqOf(ev)
+        return {
+          review: out.view,
+          ...(out.progress !== undefined && { progress: out.progress }),
+          lastSeq: seq === null ? t.lastSeq : Math.max(t.lastSeq, seq),
+          // A follow that goes on through pauses doesn't end at them, so the pause ends the wait.
+          ...(out.ended && { reacting: false }),
+        }
       }),
-      onPoll: (view) => patch(turnId, () => ({ review: view, progress: null })),
-    }).finally(() => patch(turnId, () => ({ reacting: false })))
+      // A polled view carries the newest event id when it was read (older agents didn't).
+      onPoll: (view) => patch(turnId, (t) => ({
+        review: view, progress: null,
+        ...(view.lastEventId === undefined ? { seqBehind: true } : { lastSeq: Math.max(t.lastSeq, view.lastEventId), seqBehind: false }),
+      })),
+      onGone: () => patch(turnId, (t) => ({ review: t.review && { ...t.review, status: "failed", error: GONE }, progress: null })),
+    }).finally(() => {
+      if (follows.current.get(turnId) !== ctrl) return // a newer follow took over, or the page closed
+      follows.current.delete(turnId)
+      patch(turnId, () => ({ reacting: false }))
+    })
   }, [patch])
 
   useEffect(() => {
+    let active = true // this run of the effect (strict mode runs it twice)
+    alive.current = true
     apiClient.get<SavedIdea[]>("/ideas/user").then((r) => setIdeas(r.data)).catch(() => setIdeas([]))
     apiClient.get<{ profileCompletion?: number }>("/founder/profile").then((r) => setProfileDone(r.data.profileCompletion ?? 0)).catch(() => {})
     apiClient.get<{ joined: boolean }>("/founder/review-waitlist").then((r) => setWaitlist(r.data.joined)).catch(() => setWaitlist(null))
     reviewsApi.status().then((st) => {
+      if (!active) return
       setLive(st)
       if (st.live && "quota" in st && st.quota) setQuota(st.quota)
       if (!st.live) return
       // A review still running or waiting for reactions comes back after a reload.
       reviewsApi.latest().then((v) => {
-        if (!v || (v.status !== "running" && v.status !== "awaiting_reaction")) return
+        if (!active || !v || (v.status !== "running" && v.status !== "awaiting_reaction")) return
         const id = Date.now()
+        const known = v.lastEventId
         setTurns([{ id, text: v.brief?.oneLiner ?? "Your last review", idea: null, readers: v.readers, overlaps: null, error: null,
           review: v, progress: v.status === "running" ? { stage: "reading", text: "Picking up where it left off." } : null,
-          general: null, reviewError: null, lastSeq: 0, reacting: false, restored: true }])
-        if (v.status === "running") follow(id, v.reviewId, 0)
+          general: null, reviewError: null, lastSeq: known ?? 0, seqBehind: known === undefined, reacting: false, restored: true }])
+        // The view carries the newest event id: a running review resumes after it, and one that
+        // waits for the founder is followed again when they react. Without an id (an older agent),
+        // replay from the start through the old pauses.
+        if (known === undefined) follow(id, v.reviewId, 0, Infinity)
+        else if (v.status === "running") follow(id, v.reviewId, known, known)
         chatApi.history(v.reviewId).then((msgs) => {
+          if (!active) return
           const pairs: Turn[] = []
           for (let i = 0; i + 1 < msgs.length; i += 2) {
             if (msgs[i].role !== "founder" || msgs[i + 1].role !== "something") continue
@@ -167,7 +201,12 @@ export default function SomethingPage() {
       }).catch(() => {})
     })
     const all = follows.current
-    return () => { all.forEach((c) => c.abort()) }
+    return () => {
+      active = false
+      alive.current = false
+      all.forEach((c) => c.abort())
+      all.clear()
+    }
   }, [follow])
 
   useEffect(() => {
@@ -242,7 +281,9 @@ export default function SomethingPage() {
     patch(turn.id, () => ({ reacting: true, progress: reaction.kind === "dispute" ? { stage: "rebuttal", text: "Reading your reply." } : null }))
     try {
       await reviewsApi.react(turn.review.reviewId, reaction)
-      follow(turn.id, turn.review.reviewId, turn.lastSeq)
+      // A follow still open (a review brought back after a reload) carries the reply by itself.
+      // Otherwise resume after the newest event applied, through replayed pauses if that may be behind.
+      if (!follows.current.has(turn.id)) follow(turn.id, turn.review.reviewId, turn.lastSeq, turn.seqBehind ? Infinity : turn.lastSeq)
     } catch (err) {
       patch(turn.id, () => ({ reacting: false, progress: null, reviewError: apiError(err, "That didn't save. Please try again.") }))
     }
@@ -381,8 +422,11 @@ function Composer({
     el.style.height = `${Math.min(el.scrollHeight, 240)}px`
   }, [text])
 
-  const toggleReader = (r: Reader) =>
-    setReaders(readers.includes(r) ? readers.filter((x) => x !== r) : [...readers, r])
+  // At least one reader stays on: a review with neither is refused.
+  const toggleReader = (r: Reader) => {
+    if (!readers.includes(r)) setReaders([...readers, r])
+    else if (readers.length > 1) setReaders(readers.filter((x) => x !== r))
+  }
 
   return (
     <div>

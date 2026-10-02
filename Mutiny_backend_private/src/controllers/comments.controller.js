@@ -13,14 +13,16 @@ const { checkText, BLOCKED } = require('../community/filter.js');
 
 const MAX_COMMENT_LENGTH = 2000;
 const CACHE_TTL_SECONDS  = 300;
-const cacheKey = (ideaId) => `comments:v1:${ideaId}`;
+// v2: timestamps became ISO strings (v1 lists held locale dates).
+const cacheKey = (ideaId) => `comments:v2:${ideaId}`;
 
 const shape = (c, authorName) => ({
 	id:        c._id,
 	author:    authorName || (c.userId && c.userId.name) || 'Anonymous',
 	authorId:  c.userId && c.userId._id ? c.userId._id : c.userId,
 	text:      c.text,
-	timestamp: new Date(c.createdAt).toLocaleDateString(),
+	// ISO: the app shows "2 h ago" from it (a locale date string had no time and the server's locale).
+	timestamp: new Date(c.createdAt).toISOString(),
 	// Only ever set on the author's own comment: others never receive hidden or removed ones.
 	...(HIDDEN_STATES.includes(c.moderation?.state) && { hidden: c.moderation.state }),
 });
@@ -131,7 +133,8 @@ const update_comment = async (req, res) => {
 	if (words.verdict === 'block') return res.status(400).json(BLOCKED);
 
 	try {
-		const comment = await Comment.findById(commentId);
+		// Idea comments only: problem replies have their own routes (and counters).
+		const comment = await Comment.findOne({ _id: commentId, targetType: { $ne: 'Problem' } });
 		if (!comment) return res.status(404).json({ success: false, message: 'Comment not found' });
 
 		if (comment.userId.toString() !== user_id.toString()) {
@@ -139,6 +142,8 @@ const update_comment = async (req, res) => {
 		}
 
 		comment.text = text;
+		// An admin approved the old words, not these: reports count again.
+		if (comment.moderation?.state === 'approved') comment.set('moderation.state', 'visible');
 		if (words.verdict === 'review') {
 			comment.set('moderation.needsReview', true);
 			comment.set('moderation.flaggedTerms', words.terms);
@@ -162,7 +167,7 @@ const delete_comment = async (req, res) => {
 	}
 
 	try {
-		const comment = await Comment.findById(commentId).lean();
+		const comment = await Comment.findOne({ _id: commentId, targetType: { $ne: 'Problem' } }).lean();
 		if (!comment) return res.status(404).json({ success: false, message: 'Comment not found' });
 
 		const idea = await Idea.findById(comment.postID).select('founder_id').lean();
@@ -177,6 +182,7 @@ const delete_comment = async (req, res) => {
 		if (deleted.deletedCount === 1 && isShown(comment.moderation)) {
 			await Idea.updateOne({ _id: comment.postID }, { $inc: { comments: -1 } });
 		}
+		await require('../models/report.model.js').Report.deleteMany({ targetType: 'comment', targetId: comment._id });
 		await cache.del(cacheKey(comment.postID));
 
 		return res.status(200).json({ success: true, message: 'Comment deleted' });

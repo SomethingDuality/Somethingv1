@@ -25,6 +25,8 @@ const questionStateSchema = new mongoose.Schema({
 
 questionStateSchema.index({ userId: 1, questionId: 1, entityId: 1 }, { unique: true });
 questionStateSchema.index({ userId: 1, origin: 1, status: 1 });
+// Deleting an idea removes its questions (services/ideaPurge.js).
+questionStateSchema.index({ entityId: 1 }, { partialFilterExpression: { entityId: { $type: 'objectId' } } });
 
 const QuestionState = mongoose.model('QuestionState', questionStateSchema);
 

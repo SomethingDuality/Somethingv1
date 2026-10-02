@@ -38,7 +38,11 @@ export function ThreadView({ threadId, role, onThreadChange, onBack }: {
   const [busy, setBusy] = useState(false)
   const endRef = useRef<HTMLDivElement>(null)
   const areaRef = useRef<HTMLTextAreaElement>(null)
+  // The poll cursor: the time of the newest message a fetch returned. Never our own send's time:
+  // the server overlaps `after` by only 2 s, so a reply they sent just before ours would be skipped.
   const lastAt = useRef<string | undefined>(undefined)
+  const openId = useRef(threadId)
+  openId.current = threadId
 
   const update = useCallback((t: Thread) => {
     setThread(t)
@@ -78,11 +82,13 @@ export function ThreadView({ threadId, role, onThreadChange, onBack }: {
   usePoll(async () => {
     if (!messages) return
     const fresh = await inbox.messages(threadId, lastAt.current)
+    if (openId.current !== threadId) return // another chat was opened meanwhile
+    lastAt.current = fresh.at(-1)?.at ?? lastAt.current
+    // The overlap returns some messages twice (and ours, already shown): keep one of each id.
     const known = new Set(messages.map((m) => m.id))
     const added = fresh.filter((m) => !known.has(m.id))
     if (!added.length) return
     setMessages((cur) => [...(cur ?? []), ...added.filter((m) => !(cur ?? []).some((c) => c.id === m.id))])
-    lastAt.current = added.at(-1)?.at ?? lastAt.current
     // Something new from them can change the thread too (a reply accepts a request).
     update({ ...(await inbox.thread(threadId)), unread: 0 })
     markRead()
@@ -106,7 +112,6 @@ export function ThreadView({ threadId, role, onThreadChange, onBack }: {
       const out = await inbox.send(threadId, p.text, p.clientId)
       setPending((cur) => cur.filter((x) => x.clientId !== p.clientId))
       setMessages((cur) => (cur?.some((m) => m.id === out.message.id) ? cur : [...(cur ?? []), out.message]))
-      lastAt.current = out.message.at
       update(out.thread)
     } catch (err) {
       setPending((cur) => cur.map((x) => (x.clientId === p.clientId ? { ...x, failed: true } : x)))

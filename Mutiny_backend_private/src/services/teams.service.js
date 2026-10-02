@@ -39,10 +39,17 @@ const cleanRole = (role) => {
 };
 
 /** Invites nobody answered in 14 days end (checked whenever someone looks). */
-const expireOld = () => TeamInvite.updateMany(
-	{ status: 'pending', expiresAt: { $lt: new Date() } },
-	{ $set: { status: 'expired', decidedAt: new Date() }, $unset: { openKey: '' } },
-);
+// Pending invites past their date expire. Runs on team calls, so at most once a minute (it's a
+// collection-wide update; the index on status + expiresAt keeps it cheap).
+let lastExpiry = 0;
+const expireOld = async () => {
+	if (Date.now() - lastExpiry < 60 * 1000) return;
+	lastExpiry = Date.now();
+	await TeamInvite.updateMany(
+		{ status: 'pending', expiresAt: { $lt: new Date() } },
+		{ $set: { status: 'expired', decidedAt: new Date() }, $unset: { openKey: '' } },
+	);
+};
 
 const chatEvent = (threadId, text) => require('../chat/chat.service.js').postEvent(threadId, text);
 
@@ -154,6 +161,11 @@ const decideInvite = async ({ user, inviteId, as, to }) => {
 };
 
 const accept = async ({ user, inviteId }) => {
+	// A block between the two ends the invite (block revokes it; this covers one in flight).
+	const pending = validId(inviteId) && await TeamInvite.findOne({ _id: inviteId, inviteeId: oid(user._id) }).select('inviterId').lean();
+	if (pending && await require('../models/block.model.js').Block.exists({ $or: [
+		{ blockerId: pending.inviterId, blockedId: oid(user._id) }, { blockerId: oid(user._id), blockedId: pending.inviterId },
+	] })) throw new TeamError(409, 'This invite is no longer open.', 'NOT_PENDING');
 	const inv = await decideInvite({ user, inviteId, as: 'invitee', to: 'accepted' });
 	const idea = await Idea.findById(inv.ideaId).select('title founder_id').lean();
 	if (!idea) throw new TeamError(404, 'This idea no longer exists.');

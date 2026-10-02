@@ -1,5 +1,6 @@
 const express = require('express');
 const multer  = require('multer');
+const mongoose = require('mongoose');
 const path    = require('path');
 const fs      = require('fs');
 const router  = express.Router();
@@ -35,40 +36,36 @@ const { add_milestone, update_milestone, delete_milestone } = require('../contro
 
 
 
-const attachmentStorage = multer.diskStorage({
-	destination: (req, file, cb) => {
-		const dir = path.join(__dirname, '../../uploads/ideas', req.params.id);
-		fs.mkdirSync(dir, { recursive: true });
-		cb(null, dir);
-	},
-	filename: (req, file, cb) => {
-		
-		const safe = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
-		cb(null, `${Date.now()}-${safe}`);
-	}
-});
+const { Idea } = require('../models/ideas.model.js');
+const uploads = require('../utils/uploads.js');
 
-const attachmentFilter = (req, file, cb) => {
-	const allowed = [
-		'application/pdf',
-		'application/msword',
-		'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-		'application/vnd.ms-powerpoint',
-		'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-		'video/mp4', 'video/webm', 'video/quicktime',
-		'audio/mpeg', 'audio/wav', 'audio/ogg',
-	];
-	if (allowed.includes(file.mimetype)) {
-		cb(null, true);
-	} else {
-		cb(new Error('File type not allowed'), false);
+// The id, the owner and the file count are checked before multer writes a byte (X-5, X-8); the
+// folder is named from the stored idea's id, never from the URL.
+const ownIdeaForUpload = async (req, res, next) => {
+	if (!mongoose.isObjectIdOrHexString(req.params.id)) {
+		return res.status(400).json({ success: false, message: 'Invalid idea ID' });
 	}
+	const idea = await Idea.findById(req.params.id).select('founder_id attachments').lean();
+	if (!idea) return res.status(404).json({ success: false, message: 'Idea not found' });
+	if (String(idea.founder_id) !== String(req.user._id)) {
+		return res.status(403).json({ success: false, message: 'Not authorized to add attachments to this idea' });
+	}
+	if ((idea.attachments || []).length >= uploads.MAX_ATTACHMENTS) {
+		return res.status(400).json({ success: false, message: `An idea can have up to ${uploads.MAX_ATTACHMENTS} files` });
+	}
+	req.uploadDir = path.join(uploads.IDEAS_DIR, String(idea._id));
+	await fs.promises.mkdir(req.uploadDir, { recursive: true });
+	return next();
 };
 
 const uploadAttachment = multer({
-	storage: attachmentStorage,
-	fileFilter: attachmentFilter,
-	limits: { fileSize: 50 * 1024 * 1024 } 
+	storage: multer.diskStorage({
+		destination: (req, file, cb) => cb(null, req.uploadDir),
+		filename: uploads.filenameFor(uploads.ATTACHMENT_TYPES),
+	}),
+	fileFilter: uploads.filterFor(uploads.ATTACHMENT_TYPES, 'File type not allowed'),
+	limits: { fileSize: 50 * 1024 * 1024, files: 1 },
+	defParamCharset: 'utf8', // browsers send UTF-8 file names; the default (latin1) garbles them
 });
 
 
@@ -86,11 +83,11 @@ router.post('/:id/like',              protect, like_idea);
 router.delete('/:id/like',            protect, unlike_idea);
 
 
-router.post('/:id/attachments',               protect, uploadAttachment.single('file'), upload_attachment);
+router.post('/:id/attachments',               protect, ownIdeaForUpload, uploadAttachment.single('file'), uploads.checkMagic(uploads.ATTACHMENT_TYPES), upload_attachment);
 router.delete('/:id/attachments/:filename',   protect, delete_attachment);
 
 
-router.post('/:id/collaborate',               protect, request_collaboration);
+router.post('/:id/collaborate',               protect, require('../middleware/rateLimits.js').chatRequestLimiter, request_collaboration);
 
 // Founder updates; investors can ask for one (once a week per idea).
 router.get('/:id/updates',                   optionalAuth, list_updates);

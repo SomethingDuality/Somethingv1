@@ -95,6 +95,9 @@ const seed = async () => {
 			extraIdeas++;
 		}
 	}
+	// The seeded addresses are ours (*.test), so they count as verified (the local admin needs it).
+	const { BaseUser } = require('../src/models/user.model.js');
+	await BaseUser.updateMany({ email: { $in: [...SEED_USERS, ...EXTRA_FOUNDERS].map((u) => u.email) } }, { $set: { emailVerified: true } });
 	console.log(`[dev:memory] seeded ${SEED_USERS.map((u) => u.email).join(', ')} (password in scripts/dev-inmemory.js) + ${1 + extraIdeas} public ideas from ${1 + EXTRA_FOUNDERS.length} test founders`);
 };
 
@@ -108,6 +111,7 @@ const seed = async () => {
 	process.env.AGENT_URL         ??= 'http://127.0.0.1:8000';
 	process.env.KAFKA_ENABLED = 'false';
 	process.env.DEV_LOGIN   ??= 'true';
+	process.env.DEV_TOOLS   ??= 'true'; // the x-dev-now clock and /agent/diagnostics
 	// Locally the test founder is the admin (approves investor verification at /admin).
 	process.env.ADMIN_EMAILS ??= TEST_ACCOUNTS.find((a) => a.role === 'Founder').email;
 	console.log('[dev:memory] in-memory MongoDB at', process.env.MONGO_URI);

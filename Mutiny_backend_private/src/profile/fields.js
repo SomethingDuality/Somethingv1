@@ -73,7 +73,10 @@ const number = (min, max) => (v, path) => {
 	return n;
 };
 
-const bool = (v) => Boolean(v);
+const bool = (v, path) => {
+	if (typeof v !== 'boolean') throw new FieldError(path, 'must be true or false');
+	return v;
+};
 
 const entries = (required, optional, max = 20) => (v, path) => {
 	if (v === null) return [];

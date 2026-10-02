@@ -27,8 +27,10 @@ const purgeIdeas = async (ids) => {
 	const ideaIds = ideas.map((i) => i._id);
 	const titleOf = new Map(ideas.map((i) => [String(i._id), i.title]));
 
-	// What the agent stored about these ideas: memory notes, reviews, runs and checkpoints.
-	await purgeAgentForIdeas(ideaIds);
+	// What the agent stored about these ideas: memory notes, reviews, runs and checkpoints; and
+	// the Something box's questions about them (confirms quote their values).
+	await purgeAgentForIdeas(ideaIds, new Map(ideas.map((i) => [String(i._id), String(i.founder_id)])));
+	await require('../models/questionState.model.js').QuestionState.deleteMany({ entityId: { $in: ideaIds } });
 
 	// Reports about the ideas or their comments go too: the content they point at is gone.
 	const commentIds = (await Comment.find({ postID: { $in: ideaIds } }).select('_id').lean()).map((c) => c._id);
@@ -42,7 +44,8 @@ const purgeIdeas = async (ids) => {
 		TeamInvite.deleteMany({ ideaId: { $in: ideaIds } }),
 	]);
 	await Comment.deleteMany({ postID: { $in: ideaIds } });
-	await cache.del(...ideaIds.map((id) => `comments:v1:${id}`));
+	await cache.del(...ideaIds.map((id) => `comments:v2:${id}`));
+	await cache.dropPublicLists();
 
 	const teams = await Team.find({ idea_id: { $in: ideaIds } }).select('_id').lean();
 	if (teams.length) {

@@ -24,20 +24,21 @@ const headersFor = (user, extra = {}) => ({
 	...extra,
 });
 
-// Returns the fetch Response. `timeoutMs` bounds the time until headers arrive; for streams the
-// caller passes its own `signal` to cancel later.
+// Returns the fetch Response. `timeoutMs` bounds the time until headers arrive. The caller's
+// `signal` stays linked for the whole response, body included, so aborting it later (the browser
+// left an SSE stream) also cancels the upstream request. Redirects are never followed: the
+// request carries the service key.
 const agentFetch = async (path, { method = 'GET', body, user, timeoutMs = 5000, signal } = {}) => {
 	if (!enabled()) throw new AgentUnavailable(503, 'agent_disabled', 'Reviews are not available right now.');
 	const timer = new AbortController();
 	const t = setTimeout(() => timer.abort(), timeoutMs);
-	const onAbort = () => timer.abort();
-	signal?.addEventListener('abort', onAbort, { once: true });
 	try {
 		return await fetch(AGENT_URL() + path, {
 			method,
 			headers: headersFor(user),
 			body: body === undefined ? undefined : JSON.stringify(body),
-			signal: timer.signal,
+			signal: signal ? AbortSignal.any([signal, timer.signal]) : timer.signal,
+			redirect: 'error',
 		});
 	} catch (err) {
 		if (signal?.aborted) throw err;
@@ -45,7 +46,6 @@ const agentFetch = async (path, { method = 'GET', body, user, timeoutMs = 5000, 
 		throw new AgentUnavailable(503, 'agent_unavailable', 'The review service is not reachable right now.');
 	} finally {
 		clearTimeout(t);
-		signal?.removeEventListener('abort', onAbort);
 	}
 };
 
@@ -54,6 +54,10 @@ const agentJSON = async (path, opts = {}) => {
 	const res = await agentFetch(path, opts);
 	let data = null;
 	try { data = await res.json(); } catch { data = null; }
+	// The agent refusing our service key is our misconfiguration, not the user's session.
+	if (res.status === 401 || res.status === 403 && data?.code === 'unauthorized') {
+		throw new AgentUnavailable(502, 'agent_auth', 'The review service had a problem. Please try again.');
+	}
 	if (res.status >= 500) {
 		const err = new AgentUnavailable(res.status === 503 ? 503 : 502, data?.code || 'agent_error', data?.message || 'The review service had a problem. Please try again.');
 		err.body = data;

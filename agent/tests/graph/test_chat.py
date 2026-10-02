@@ -71,3 +71,28 @@ async def test_a_prediction_is_replaced_with_the_next_test(review):
 async def test_someone_elses_review_is_not_found(review):
     with pytest.raises(NotFound):
         await chat.turn("65f00000000000000000ffff", None, "How do I test this?", review_id=review)
+
+
+async def test_another_founders_idea_is_never_read_or_written(review, fake_node):
+    """The chat's idea comes from the founder's own review, or from Node's ownership check (IDOR)."""
+    other_user, other_idea = "65f000000000000000000002", "65f0000000000000000000bb"
+    fake_node.add_user(other_user, "Founder")
+    fake_node.add_idea(other_idea, other_user, title="Hospital LOIs", description="Fourteen hospitals signed letters of intent.")
+
+    # Their own review, but someone else's idea in the request.
+    with pytest.raises(NotFound):
+        await chat.turn(USER, None, "Our pricing is 500 rupees per month for every hostel", review_id=review, idea_id=other_idea)
+    # No review: the idea must be theirs.
+    with pytest.raises(NotFound):
+        await chat.turn(USER, None, "Our pricing is 500 rupees per month for every hostel", idea_id=other_idea)
+    await jobs.worker.drain()
+    assert await db.col("agent_notes").count_documents({"scope_key": {"$regex": other_idea}}) == 0
+    assert await db.col("agent_jobs").count_documents({"idea_id": other_idea}) == 0
+
+    # A job naming someone else's idea (however it got queued) writes nothing.
+    await jobs.enqueue("extract_text", f"i:{other_idea}", user_id=USER, idea_id=other_idea, payload={
+        "user_id": USER, "idea_id": other_idea, "text": "Hospitals actually pay nothing for this service today",
+        "source": {"type": "chat", "ref_id": "x" * 24, "at": "2026-10-02T00:00:00+00:00"},
+    }, dedupe_key="chat:forged")
+    await jobs.worker.drain()
+    assert await db.col("agent_notes").count_documents({"scope_key": {"$regex": other_idea}}) == 0

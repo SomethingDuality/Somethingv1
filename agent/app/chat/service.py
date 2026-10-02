@@ -3,7 +3,7 @@
 from datetime import datetime, timezone
 
 from app.chat.graph.builder import chat_graph
-from app.core import db, quotas
+from app.core import db, node_client, quotas
 from app.core.errors import InvalidInput, NotFound, ProviderUnavailable
 from app.core.sanitize import clean
 from app.core.settings import get_settings
@@ -36,30 +36,42 @@ async def turn(user_id: str, tz: str | None, text: str, *, review_id: str | None
     text = clean(text, 2000)
     if not text:
         raise InvalidInput("empty")
+    # The idea is never taken on the request's word: memory scopes are per idea, so a founder who
+    # named someone else's idea would read and write that idea's memory.
     if review_id:
         review = await db.col("agent_reviews").find_one({"_id": review_id, "user_id": user_id}, {"idea_id": 1})
         if not review:
             raise NotFound("review")
-        idea_id = idea_id or review.get("idea_id")
+        if idea_id and idea_id != review.get("idea_id"):
+            raise NotFound("idea")
+        idea_id = review.get("idea_id")
+    elif idea_id:
+        await node_client.context(user_id, idea_id=idea_id, purpose="memory")  # NotFound unless it's theirs
     rules = classify_turn(text, has_context=bool(review_id or idea_id))["kind"]
     quota = None
     if rules in ("about_this", "unsure"):
         await quotas.check_budget()
         quota = await quotas.consume(user_id, FEATURE, get_settings().chat_turns_per_day, tz)
     past = await history(user_id, review_id, idea_id)
-    out = await chat_graph.ainvoke(
-        {"user_id": user_id, "text": text, "review_id": review_id, "idea_id": idea_id,
-         "history": [{"role": m["role"], "text": m["text"]} for m in past[-8:]]},
-        config={"configurable": {"user_id": user_id}},
-    )
+    try:
+        out = await chat_graph.ainvoke(
+            {"user_id": user_id, "text": text, "review_id": review_id, "idea_id": idea_id,
+             "history": [{"role": m["role"], "text": m["text"]} for m in past[-8:]]},
+            config={"configurable": {"user_id": user_id}},
+        )
+    except Exception:
+        if quota:  # our failure: the turn comes back
+            await quotas.refund(user_id, FEATURE, quota["day"])
+        raise
     if out.get("status") == "failed":
         if quota:
-            await quotas.refund(user_id, FEATURE, tz)
+            await quotas.refund(user_id, FEATURE, quota["day"])
         raise ProviderUnavailable((out.get("error") or {}).get("code", "chat failed"))
     kind = out.get("kind")
     if kind == "new_idea":
         if quota:
-            await quotas.refund(user_id, FEATURE, tz)  # it's a review, not a chat reply
+            await quotas.refund(user_id, FEATURE, quota["day"])  # it's a review, not a chat reply
         return {"kind": "new_idea"}
     await _append(user_id, review_id, idea_id, [{"role": "founder", "text": text}, {"role": "something", "text": out["reply"]}])
-    return {"kind": kind, "reply": out["reply"], "riskIds": out.get("risk_ids", []), **({"quota": quota} if quota else {})}
+    public_quota = quota and {k: quota[k] for k in ("used", "limit", "resetsAt")}
+    return {"kind": kind, "reply": out["reply"], "riskIds": out.get("risk_ids", []), **({"quota": public_quota} if quota else {})}

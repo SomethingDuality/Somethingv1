@@ -1,7 +1,7 @@
 // Community C3: the problems board.
 const { test, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
-const { start, stop, resetDb, agent, settle } = require('./helpers/server.js');
+const { start, stop, resetDb, agent, verifyEmail, trustReporter, settle } = require('./helpers/server.js');
 
 let Problem, Vote, Comment, Report, BaseUser;
 
@@ -147,6 +147,7 @@ test('three reports hide a problem from everyone but its author; admins see wher
 	const fay = await newUser('founder', 'Fay');
 	const p = await post(fay, { anonymous: true });
 	for (const r of await Promise.all([0, 1, 2].map((i) => newUser('investor', `R${i}x`)))) {
+		await trustReporter(r.email);
 		await r.post('/reports', { type: 'problem', id: p.id, reason: 'spam' });
 	}
 	assert.equal((await agent().get('/problems')).body.problems.length, 0);
@@ -155,6 +156,7 @@ test('three reports hide a problem from everyone but its author; admins see wher
 
 	const saved = process.env.ADMIN_EMAILS;
 	process.env.ADMIN_EMAILS = fay.email;
+	await verifyEmail(fay.email);
 	try {
 		const queue = (await fay.get('/admin/moderation?view=hidden')).body;
 		assert.equal(queue[0].type, 'problem');

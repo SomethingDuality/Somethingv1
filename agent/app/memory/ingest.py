@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from app.core import db, jobs, node_client
 from app.core.checkpointer import thread_id
 from app.core.errors import NotFound
+from app.core.log import log
 from app.core.quotes import verify
 from app.core.runs import manager
 from app.core.sanitize import clean, spotlight
@@ -109,12 +110,15 @@ async def extract(scope: dict, text: str, source: dict, ctx: dict) -> list[dict]
     )
     out = await llm.structured(prompt, Extraction, tier="heavy", ctx=ctx, user_text=True, max_tokens=2500)
     cands = []
-    for i, f in enumerate(out.facts):
+    for f in out.facts:
         if not verify(f.quote, body):
             continue
         slot = slots.get(f.slot_key)
         cands.append({
-            "candidate_id": _h(scope["scope_key"], source.get("type"), source.get("ref_id"), _h(body), i),
+            # By what the fact quotes, not its place in the list: a retry (temperature 0.7) can
+            # reorder the facts, and an index would skip a new one or write a reworded one twice.
+            "candidate_id": _h(scope["scope_key"], source.get("type"), source.get("ref_id"), _h(body),
+                               " ".join(f.quote.lower().split()), f.slot_key or ""),
             "text": f.text.strip()[:500], "quote": f.quote.strip()[:500],
             "slot_key": slot.key if slot and slot.scope == scope["kind"] else None,
             "value": f.value if slot else None,
@@ -214,6 +218,12 @@ async def milestone_done(job: dict) -> None:
 async def extract_text(job: dict) -> None:
     """Founder text from elsewhere (the Something chat) → extracted facts for a saved idea."""
     p = job["payload"]
+    try:
+        # Still theirs (the chat checked; the idea may since be gone or never have been theirs).
+        await node_client.context(p["user_id"], idea_id=p["idea_id"], purpose="memory")
+    except NotFound:
+        log("extract_text.skipped", reason="idea_not_theirs", idea_id=p["idea_id"])
+        return
     scope = idea_scope(p["user_id"], p["idea_id"])
     await run_all(scope, await extract(scope, p["text"], p["source"], {"feature": "memory", "node": "extract", "user_id": p["user_id"]}))
 

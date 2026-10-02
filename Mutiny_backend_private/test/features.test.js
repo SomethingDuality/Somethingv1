@@ -1,6 +1,6 @@
 const { test, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
-const { start, stop, resetDb, agent, settle } = require('./helpers/server.js');
+const { start, stop, resetDb, agent, verifyEmail, settle } = require('./helpers/server.js');
 
 let IdeaUpdate;
 
@@ -55,7 +55,12 @@ test('founder updates reach savers and committers; investors can ask once a week
 	assert.equal((await fay.post(`/ideas/${id}/request-update`)).status, 403);
 	assert.equal((await ivan.post(`/ideas/${id}/request-update`)).body.sent, true);
 	assert.equal((await ivan.post(`/ideas/${id}/request-update`)).body.sent, false);
+	// Ivan committed money, so the founder already knows his name; Sara only saved it, and Ghost
+	// Mode (on by default) keeps her "An investor" (C5).
 	assert.equal((await texts(fay)).filter((t) => t === 'Ivan asked for an update on “Campus compost”').length, 1);
+	assert.equal((await sara.post(`/ideas/${id}/request-update`)).body.sent, true);
+	assert.equal((await texts(fay)).filter((t) => t === 'An investor asked for an update on “Campus compost”').length, 1);
+	assert.ok(!(await texts(fay)).some((t) => t.includes('Sara')), 'a ghost is never named');
 
 	// A draft's updates stay with the founder, and everything goes when the idea is deleted.
 	const draft = await newIdea(fay, { title: 'Secret', isDraft: true });
@@ -103,6 +108,7 @@ test('investor verification: LinkedIn, a hand check by an admin, and a mark foun
 	const ivan = await newUser('investor', 'Ivan');
 	const saved = process.env.ADMIN_EMAILS;
 	process.env.ADMIN_EMAILS = fay.email;
+	await verifyEmail(fay.email);
 	try {
 		assert.equal((await fay.get('/auth/me')).body.isAdmin, true);
 		assert.equal((await ivan.get('/auth/me')).body.isAdmin, false);

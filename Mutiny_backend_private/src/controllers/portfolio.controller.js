@@ -24,15 +24,17 @@ const assertInvestor = (req, res) => {
 
 // Finite and bounded: "Infinity" passes an isNaN check and would be stored (and served as null).
 const MAX_AMOUNT = 1e9;
+// At least $1, as the message says: fractions of a cent made trust farmable (X-10).
 const validAmount = (amount) => {
 	const n = Number(amount);
-	return Number.isFinite(n) && n > 0 && n <= MAX_AMOUNT;
+	return Number.isFinite(n) && n >= 1 && n <= MAX_AMOUNT;
 };
+const toCents = (amount) => Math.round(Number(amount) * 100) / 100;
 
 const commit = async (req, res) => {
 	if (!assertInvestor(req, res)) return;
 
-	const { ideaId, amount } = req.body;
+	const { ideaId, amount } = req.body || {};
 
 	if (!ideaId || !mongoose.Types.ObjectId.isValid(ideaId)) {
 		return res.status(400).json({ success: false, message: 'Valid ideaId is required' });
@@ -50,68 +52,62 @@ const commit = async (req, res) => {
 		}
 
 		
-		let portfolio = await Portfolio.findOne({ investor_id: req.user._id });
-
-		if (!portfolio) {
-			portfolio = new Portfolio({
-				investor_id:  req.user._id,
-				investments:  []
-			});
-		}
-
-		
-		const alreadyCommitted = portfolio.investments.some(
-			(inv) => inv.idea_id.toString() === ideaId
-		);
-		if (alreadyCommitted) {
-			return res.status(409).json({
-				success: false,
-				message: 'You have already committed to this idea'
-			});
-		}
-
-		
-		portfolio.investments.push({
-			idea_id:          ideaId,
-			amount_committed: Number(amount),
-			amount_released:  0,
-			status:           'active'
-		});
-
-		await portfolio.save();
-
-		
-		await Investor.findByIdAndUpdate(req.user._id, {
-			portfolio_id: portfolio._id
-		});
-
-		
-		await incrementTrust(req.user._id, { history: 1 });
-
-		
-		if (idea.founder_id) {
-			const investor = await Investor
-				.findById(req.user._id)
-				.select('name firm verification.status')
-				.lean();
-
-			const investorName = investor?.name || 'An investor';
-			const firmSuffix   = investor?.firm ? ` (${investor.firm})` : '';
-			const verified     = investor?.verification?.status === 'verified' ? ', verified investor' : '';
-
-			await pushNotification(
-				idea.founder_id,
-				`${investorName}${firmSuffix}${verified} committed $${Number(amount).toLocaleString()} to your idea “${idea.title}”`,
-				{ link: '/founder/funding' }
+		// One atomic write (X-45): the portfolio is created if needed, and the commitment is added
+		// only when this idea isn't in it yet. The id is compared as an ObjectId, so the same id in
+		// another letter case can't slip past (a string compare did).
+		const ideaOid = new mongoose.Types.ObjectId(String(ideaId));
+		let portfolio;
+		try {
+			portfolio = await Portfolio.findOneAndUpdate(
+				{ investor_id: req.user._id, 'investments.idea_id': { $ne: ideaOid } },
+				{ $push: { investments: { idea_id: ideaOid, amount_committed: toCents(amount), amount_released: 0, status: 'active' } } },
+				{ new: true, upsert: true },
 			);
-			// Money needs a name (C5): any ghost chat with this founder shows it from now on.
-			await require('../chat/chat.service.js').revealOnCommit({ investorId: req.user._id, founderId: idea.founder_id, ideaTitle: idea.title });
+		} catch (err) {
+			// The portfolio exists and already has this idea: the upsert hit the unique investor_id.
+			if (err.code === 11000) {
+				return res.status(409).json({ success: false, message: 'You have already committed to this idea' });
+			}
+			throw err;
+		}
+
+		// The commitment is saved: what follows (the trust point, the founder's notification, the
+		// chat reveal) must not turn it into an error, or a retry would hit "already committed".
+		try {
+			await Investor.findByIdAndUpdate(req.user._id, {
+				portfolio_id: portfolio._id
+			});
+
+		
+			await incrementTrust(req.user._id, { history: 1 });
+
+		
+			if (idea.founder_id) {
+				const investor = await Investor
+					.findById(req.user._id)
+					.select('name firm verification.status')
+					.lean();
+
+				const investorName = investor?.name || 'An investor';
+				const firmSuffix   = investor?.firm ? ` (${investor.firm})` : '';
+				const verified     = investor?.verification?.status === 'verified' ? ', verified investor' : '';
+
+				await pushNotification(
+					idea.founder_id,
+					`${investorName}${firmSuffix}${verified} committed $${toCents(amount).toLocaleString()} to your idea “${idea.title}”`,
+					{ link: '/founder/funding' }
+				);
+				// Money needs a name (C5): any ghost chat with this founder shows it from now on.
+				await require('../chat/chat.service.js').revealOnCommit({ investorId: req.user._id, founderId: idea.founder_id, ideaTitle: idea.title });
+			}
+		} catch (err) {
+			console.error('commit side effects:', err);
 		}
 
 		publishInvestmentCommitted({
 			investorId: req.user._id.toString(),
-			ideaId:     ideaId,
-			amount:     Number(amount),
+			ideaId:     String(ideaOid),
+			amount:     toCents(amount),
 		});
 
 		return res.status(201).json({
@@ -196,28 +192,40 @@ const get_portfolio = async (req, res) => {
 
 
 
+// Withdrawing takes back a promise, so only before any money was released (X-95): released
+// money stays on the founder's record. The history point it earned comes off the trust score,
+// so commit → withdraw → commit can't farm trust (X-10), and the founder is told.
 const withdraw = async (req, res) => {
 	if (!assertInvestor(req, res)) return;
 
 	const { investmentId } = req.params;
+	if (!mongoose.isObjectIdOrHexString(investmentId)) {
+		return res.status(400).json({ success: false, message: 'Invalid investment ID' });
+	}
 
 	try {
-		const portfolio = await Portfolio.findOne({ investor_id: req.user._id });
-		if (!portfolio) {
-			return res.status(404).json({ success: false, message: 'Portfolio not found' });
-		}
-
-		const before = portfolio.investments.length;
-		portfolio.investments = portfolio.investments.filter(
-			(inv) => inv._id.toString() !== investmentId
-		);
-
-		if (portfolio.investments.length === before) {
+		const portfolio = await Portfolio.findOne({ investor_id: req.user._id }).select('investments').lean();
+		const investment = portfolio?.investments.find((inv) => String(inv._id) === String(investmentId));
+		if (!investment) {
 			return res.status(404).json({ success: false, message: 'Investment not found' });
 		}
+		if ((investment.amount_released || 0) > 0) {
+			return res.status(409).json({ success: false, message: "Money you've already released can't be withdrawn" });
+		}
 
-		await portfolio.save();
+		const pulled = await Portfolio.updateOne(
+			{ investor_id: req.user._id, investments: { $elemMatch: { _id: investment._id, amount_released: 0 } } },
+			{ $pull: { investments: { _id: investment._id } } },
+		);
+		if (pulled.matchedCount !== 1) {
+			return res.status(409).json({ success: false, message: 'This commitment just changed; refresh and try again' });
+		}
+		await incrementTrust(req.user._id, { history: -1 });
 
+		const idea = await Idea.findById(investment.idea_id).select('title founder_id').lean();
+		if (idea?.founder_id) {
+			await pushNotification(idea.founder_id, `An investor withdrew their commitment to “${idea.title}”`, { link: '/founder/funding' });
+		}
 		return res.status(200).json({ success: true, message: 'Investment withdrawn' });
 
 	} catch (err) {
@@ -259,7 +267,7 @@ async function release(req, res) {
 			return res.status(404).json({ success: false, message: 'Investment not found' });
 		}
 
-		const releaseAmount = Number(amount);
+		const releaseAmount = toCents(amount);
 		const remaining = investment.amount_committed - investment.amount_released;
 
 		if (releaseAmount > remaining) {
@@ -288,10 +296,20 @@ async function release(req, res) {
 			investment.status = 'released';
 		}
 
-		await portfolio.save();
+		// Trust counts commitments that money actually reached, once each: many small releases on
+		// one commitment earn the same as one (X-10).
+		const firstRelease = investment.releases.length === 1;
+		try {
+			await portfolio.save();
+		} catch (err) {
+			// Two releases at once: Mongoose's version check stops the second (X-45).
+			if (err.name === 'VersionError') {
+				return res.status(409).json({ success: false, message: 'Another release just went through; refresh and try again' });
+			}
+			throw err;
+		}
 
-		
-		await incrementTrust(req.user._id, { escrowReleases: 1 });
+		if (firstRelease) await incrementTrust(req.user._id, { escrowReleases: 1 });
 
 		publishInvestmentReleased({
 			investorId:    req.user._id.toString(),

@@ -1,6 +1,6 @@
 "use client"
 
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { ChevronDown, ChevronUp } from "lucide-react"
 import apiClient from "@/lib/axios"
@@ -103,14 +103,20 @@ export function ProblemsBoard({ role }: { role: "founder" | "investor" }) {
     return `/problems?${qs}`
   }, [sort, tag, q])
 
+  // Each new search or filter bumps this; an answer to an older one arriving late is dropped.
+  const request = useRef(0)
+
   const load = useCallback(async () => {
+    const mine = ++request.current
     setError(null)
     setItems(null)
     try {
       const res = await apiClient.get<{ problems: Problem[]; nextPage: number | null }>(url(1))
+      if (mine !== request.current) return
       setItems(res.data.problems)
       setNextPage(res.data.nextPage)
     } catch (err) {
+      if (mine !== request.current) return
       setItems([])
       setError(apiError(err, "Couldn't load problems."))
     }
@@ -120,9 +126,11 @@ export function ProblemsBoard({ role }: { role: "founder" | "investor" }) {
 
   const loadMore = async () => {
     if (!nextPage) return
+    const mine = request.current
     setLoadingMore(true)
     try {
       const res = await apiClient.get<{ problems: Problem[]; nextPage: number | null }>(url(nextPage))
+      if (mine !== request.current) return // the search changed meanwhile
       setItems((cur) => [...(cur ?? []), ...res.data.problems.filter((p) => !(cur ?? []).some((c) => c.id === p.id))])
       setNextPage(res.data.nextPage)
     } catch (err) {

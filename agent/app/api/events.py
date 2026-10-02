@@ -34,6 +34,11 @@ async def receive(event: EventIn, _caller: Caller = Depends(service)):
             "payload": payload, "received_at": datetime.now(timezone.utc), "status": "received", "attempts": 0,
         })
     except DuplicateKeyError:
-        return {"status": "duplicate"}
+        # Stored before, but its jobs may never have been queued (we failed in between and Node
+        # retried): queue them again. Job dedupe keys make this a no-op when they exist.
+        stored = await db.col("agent_events").find_one({"_id": event.eventId}, {"status": 1})
+        if (stored or {}).get("status") != "received":
+            return {"status": "duplicate"}
     queued = await jobs.enqueue_event(payload, user_id=user_id, idea_id=idea_id)
+    await db.col("agent_events").update_one({"_id": event.eventId, "status": "received"}, {"$set": {"status": "handled"}})
     return {"status": "queued" if queued else "ignored"}

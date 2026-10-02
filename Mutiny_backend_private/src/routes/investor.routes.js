@@ -1,6 +1,6 @@
 const express = require('express');
 const multer  = require('multer');
-const path    = require('path');
+const uploads = require('../utils/uploads.js');
 const router  = express.Router();
 
 const {
@@ -26,17 +26,14 @@ const {
 
 const { protect } = require('../middleware/auth.middleware.js');
 
-const storage = multer.diskStorage({
-	destination: (req, file, cb) => cb(null, path.join(__dirname, '../../uploads/avatars')),
-	filename:    (req, file, cb) => cb(null, `${req.user._id}-${Date.now()}${path.extname(file.originalname).toLowerCase()}`)
-});
+// Avatars: random names with our own extension, contents checked (X-7); see utils/uploads.js.
 const upload = multer({
-	storage,
-	fileFilter: (req, file, cb) => {
-		const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
-		allowed.includes(file.mimetype) ? cb(null, true) : cb(new Error('Images only'), false);
-	},
-	limits: { fileSize: 5 * 1024 * 1024 }
+	storage: multer.diskStorage({
+		destination: (req, file, cb) => cb(null, uploads.AVATARS_DIR),
+		filename: uploads.filenameFor(uploads.AVATAR_TYPES),
+	}),
+	fileFilter: uploads.filterFor(uploads.AVATAR_TYPES, 'Images only'),
+	limits: { fileSize: 5 * 1024 * 1024, files: 1 },
 });
 
 
@@ -52,7 +49,7 @@ router.put('/ghost-mode',                update_ghost_mode);
 router.get('/watchlist',                 get_watchlist);
 router.post('/watchlist/:ideaId',        save_idea);
 router.delete('/watchlist/:ideaId',      unsave_idea);
-router.post('/avatar',            upload.single('avatar'), update_avatar);
+router.post('/avatar',            upload.single('avatar'), uploads.checkMagic(uploads.AVATAR_TYPES), update_avatar);
 
 
 router.post('/commit',                              commit);

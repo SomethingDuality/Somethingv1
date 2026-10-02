@@ -4,7 +4,7 @@ const router  = express.Router();
 const {
 	signup, login, me, logout, refresh,
 	forgot_password, reset_password, change_password, google_auth, delete_account,
-	dev_login_status, dev_login,
+	dev_login_status, dev_login, verify_email, resend_verification,
 } = require('../controllers/user.controller.js');
 const { protect } = require('../middleware/auth.middleware.js');
 const limits = require('../middleware/rateLimits.js');
@@ -28,6 +28,10 @@ router.post('/forgot-password', limits.forgotPasswordLimiter, forgot_password);
 router.post('/reset-password', limits.resetPasswordLimiter, reset_password);
 
 router.post('/change-password', protect, limits.changePasswordLimiter, change_password);
+
+// Email verification: the emailed link, and a new link on request.
+router.post('/verify-email', limits.resetPasswordLimiter, verify_email);
+router.post('/verify-email/resend', protect, limits.forgotPasswordLimiter, resend_verification);
 
 router.delete('/account', protect, delete_account);
 

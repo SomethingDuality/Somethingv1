@@ -1,57 +1,13 @@
 // Every call to the review (Something + Nothing) goes through here. The browser only talks to
 // Node, which checks the login and forwards to the agent. A review streams its steps as SSE;
-// if the stream drops, we reconnect from the last event id, and after three failures we fall
-// back to polling. Events and polling build the same ReviewView.
-import apiClient, { API_BASE_URL } from "@/lib/axios"
+// if the stream drops, we reconnect from the last event id, and after three failures in a row we
+// fall back to polling. Events and polling build the same ReviewView (lib/review-view.ts).
+import apiClient, { API_BASE_URL, isAuthFailure, refreshSession } from "@/lib/axios"
 import { SSEParser, type SSEEvent } from "@/lib/sse-parse"
+import { endsFollow, isTerminal, seqOf, type Reader, type ReviewView } from "@/lib/review-view"
 
-export type Reader = "something" | "nothing"
-export type RiskStatus = "open" | "accepted" | "resolved" | "stands" | "needs_test" | "disputed"
-export type VerdictLabel = "needs_evidence" | "almost_there" | "ready"
-
-export type Risk = {
-  id: string
-  category: string
-  categoryLabel: string
-  title: string
-  why: string
-  quote: string | null
-  founderStated: boolean
-  split: { agree: number; of: number; text: string }
-  test: { text: string; effort: "hours" | "days" | "weeks" }
-  criteria: string
-  status: RiskStatus
-  statusText: string
-  ruling: string | null
-}
-
-export type NothingView = {
-  verdict: { label: VerdictLabel; text: string; meaning: string; about: string }
-  risks: Risk[]
-  cannotJudge: string
-}
-
-export type SomethingView = {
-  strengths: { text: string }[]
-  concessions: string[]
-  address: { riskId: string; text: string }[]
-  nextProof: string
-  unavailable?: boolean
-}
-
-export type ReviewView = {
-  reviewId: string
-  status: "running" | "awaiting_reaction" | "complete" | "failed"
-  readers: Reader[]
-  subject: "saved_idea" | "typed_text"
-  ideaId: string | null
-  round: number
-  maxRounds: number
-  brief: { oneLiner: string; claims: { id: string; text: string; founderStated: boolean }[]; unknowns: string[] } | null
-  nothing: NothingView | null
-  something: SomethingView | null
-  error: { code: string; message: string; retryable: boolean } | null
-}
+export { applyEvent, initialView, seqOf } from "@/lib/review-view"
+export type { NothingView, Progress, Reader, ReviewView, Risk, RiskStatus, SomethingView, VerdictLabel } from "@/lib/review-view"
 
 export type Quota = { used: number; limit: number; resetsAt: string }
 export type ReviewStatus = { live: boolean; fakeModels?: boolean; quota?: Quota }
@@ -78,48 +34,16 @@ export const reviewsApi = {
   remove: (id: string) => apiClient.delete(`/agent/reviews/${id}`).then((r) => r.data),
 }
 
-export function initialView(reviewId: string, readers: Reader[], subject: ReviewView["subject"], ideaId: string | null): ReviewView {
-  return { reviewId, status: "running", readers, subject, ideaId, round: 0, maxRounds: 2, brief: null, nothing: null, something: null, error: null }
-}
-
-export type Progress = { stage: string; text: string } | null
-
-/** One event into the view. Returns the new view, the progress line, and whether the stream ended. */
-export function applyEvent(view: ReviewView, ev: SSEEvent): { view: ReviewView; progress?: Progress; ended: boolean } {
-  let data: Record<string, unknown> = {}
-  try { data = JSON.parse(ev.data || "{}") } catch { data = {} }
-  switch (ev.event) {
-    case "progress":
-      return { view, progress: { stage: String(data.stage), text: String(data.text) }, ended: false }
-    case "brief":
-      return { view: { ...view, brief: data as unknown as ReviewView["brief"] }, ended: false }
-    case "reader":
-      return data.reader === "nothing"
-        ? { view: { ...view, nothing: data as unknown as NothingView }, ended: false }
-        : { view: { ...view, something: data as unknown as SomethingView }, ended: false }
-    case "ruling": {
-      const r = data as { riskId: string; status: RiskStatus; statusText: string; ruling: string | null; round: number }
-      const nothing = view.nothing && {
-        ...view.nothing,
-        risks: view.nothing.risks.map((x) => (x.id === r.riskId ? { ...x, status: r.status, statusText: r.statusText, ruling: r.ruling } : x)),
-      }
-      return { view: { ...view, nothing, round: r.round ?? view.round }, ended: false }
-    }
-    case "interrupt":
-      return { view: { ...view, status: "awaiting_reaction", maxRounds: Number(data.maxRounds ?? view.maxRounds) }, progress: null, ended: true }
-    case "complete":
-      return { view: { ...view, status: "complete" }, progress: null, ended: true }
-    case "error":
-      return { view: { ...view, status: "failed", error: data as unknown as ReviewView["error"] }, progress: null, ended: true }
-    default:
-      return { view, ended: false }
-  }
-}
-
 type Follow = {
+  /** The id of the newest event the caller has applied: the stream resumes after it. */
   after: number
+  /** Pauses at or below this id are replays the caller already has and don't end the follow
+   *  (see endsFollow). Infinity when the caller can't know the newest id. Defaults to `after`. */
+  known?: number
   onEvent: (ev: SSEEvent) => void
   onPoll: (view: ReviewView) => void
+  /** The review was deleted or isn't the caller's: following stops. */
+  onGone?: () => void
   signal: AbortSignal
 }
 
@@ -129,8 +53,11 @@ const sleep = (ms: number, signal: AbortSignal) =>
     signal.addEventListener("abort", () => { clearTimeout(t); resolve() }, { once: true })
   })
 
+// A 4xx that a retry won't change: the review is gone or isn't the caller's (401 refreshes first).
+const gone = (status?: number) => status !== undefined && status >= 400 && status < 500 && status !== 401 && status !== 408 && status !== 429
+
 /** Follows a review until it pauses for the founder, finishes or fails. Returns the last event id. */
-export async function followReview(id: string, { after, onEvent, onPoll, signal }: Follow): Promise<number> {
+export async function followReview(id: string, { after, known = after, onEvent, onPoll, onGone, signal }: Follow): Promise<number> {
   let last = after
   let failures = 0
   let refreshed = false
@@ -140,34 +67,44 @@ export async function followReview(id: string, { after, onEvent, onPoll, signal 
         credentials: "include", headers: { accept: "text/event-stream", ...tzHeader() }, signal,
       })
       if (res.status === 401 && !refreshed) {
-        refreshed = true
         try {
-          await apiClient.post("/auth/refresh")
-        } catch {
-          window.dispatchEvent(new Event("auth:expired"))
-          return last
+          await refreshSession()
+        } catch (err) {
+          if (isAuthFailure(err)) return last // signed out; refreshSession told the app
+          throw err // offline or a 5xx: counts as a failed try
         }
+        refreshed = true
         continue
       }
+      if (gone(res.status)) {
+        onGone?.()
+        return last
+      }
       if (!res.ok || !res.body) throw new Error(`stream ${res.status}`)
+      refreshed = false // a long review can outlive the next sign-in cookie too
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
       const parser = new SSEParser()
+      let paused = false
       for (;;) {
         const { value, done } = await reader.read()
         if (done) break
+        if (value.length) failures = 0 // it's alive (pings count): only drops in a row add up
         for (const ev of parser.push(decoder.decode(value, { stream: true }))) {
-          if (ev.id) last = Number(ev.id)
+          const seq = seqOf(ev)
+          if (seq !== null) last = Math.max(last, seq)
           onEvent(ev)
-          if (ev.event === "interrupt" || ev.event === "complete" || ev.event === "error") return last
+          if (endsFollow(ev, known)) return last
+          paused = isTerminal(ev)
         }
       }
+      if (paused) continue // the agent closes the stream after every pause: go on from this one
       failures += 1 // the stream ended without a terminal event: reconnect from `last`
     } catch {
       if (signal.aborted) return last
       failures += 1
     }
-    await sleep(500 * 2 ** failures, signal)
+    if (failures < 3) await sleep(500 * 2 ** failures, signal)
   }
   // Streaming kept failing: poll the stored view until the review stops running.
   while (!signal.aborted) {
@@ -175,8 +112,14 @@ export async function followReview(id: string, { after, onEvent, onPoll, signal 
       const view = await reviewsApi.get(id)
       onPoll(view)
       if (view.status !== "running") return last
-    } catch {
-      // keep trying quietly; the page shows the last view it has
+    } catch (err) {
+      const status = (err as { response?: { status?: number } })?.response?.status
+      if (gone(status)) {
+        onGone?.()
+        return last
+      }
+      if (isAuthFailure(err)) return last
+      // otherwise keep trying quietly; the page shows the last view it has
     }
     await sleep(3000, signal)
   }

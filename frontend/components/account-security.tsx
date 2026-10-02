@@ -23,6 +23,16 @@ export function AccountSecurity() {
 
   const hasPassword = user?.hasPassword !== false
   const google = user?.authProviders?.includes("google")
+  const [linkSent, setLinkSent] = useState(false)
+
+  const resend = async () => {
+    try {
+      await apiClient.post("/auth/verify-email/resend")
+      setLinkSent(true)
+    } catch (err) {
+      toast({ title: "Link not sent", description: apiErrorMessage(err, "Please try again."), variant: "destructive" })
+    }
+  }
   const canSubmit = next.length >= 8 && (!hasPassword || current.length > 0) && !saving
 
   const submit = async (e: React.FormEvent) => {
@@ -50,6 +60,13 @@ export function AccountSecurity() {
           {user?.email}
           {google && <span className="ml-3 text-sm">Google sign-in is on</span>}
         </p>
+        {user?.emailVerified === false && (
+          <p className="text-sm text-muted-foreground">
+            {linkSent ? "We sent a new link. Open it from your inbox." : (
+              <>Not verified yet. <button type="button" onClick={resend} className="text-foreground underline underline-offset-4 cursor-pointer">Send a new link</button></>
+            )}
+          </p>
+        )}
       </div>
 
       <form onSubmit={submit} className="space-y-4">
@@ -96,7 +113,7 @@ export function DeleteAccount() {
   return (
     <form onSubmit={submit} className="space-y-4">
       <p className="max-w-[60ch] text-[15px] leading-relaxed text-muted-foreground">
-        Deletes your account and everything you&apos;ve posted or committed. Comments you wrote stay up without your name. This can&apos;t be undone.
+        Deletes your account and everything you&apos;ve posted or committed, including your comments and replies. This can&apos;t be undone.
       </p>
       <label className="block space-y-2">
         <span className="block text-[15px] text-foreground">Type {user?.email ?? "your email"} to confirm</span>

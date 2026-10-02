@@ -289,10 +289,14 @@ const block = async ({ user, threadId }) => {
 		{ $setOnInsert: { blockerId: oid(user._id), blockedId: other.userId } },
 		{ upsert: true },
 	).catch((err) => { if (err?.code !== 11000) throw err; });
-	// Every open conversation between the two closes.
+	// Every open conversation between the two closes, and so does any team invite between them.
 	await Thread.updateMany(
 		{ pairKey: t.pairKey, status: { $in: ['request', 'active'] } },
 		{ $set: { status: 'blocked', closedAt: new Date() }, $unset: { openKey: '' } },
+	);
+	await require('../models/teamInvite.model.js').TeamInvite.updateMany(
+		{ status: 'pending', $or: [{ inviterId: oid(user._id), inviteeId: other.userId }, { inviterId: other.userId, inviteeId: oid(user._id) }] },
+		{ $set: { status: 'revoked', decidedAt: new Date() }, $unset: { openKey: '' } },
 	);
 	return view(await Thread.findById(t._id).lean(), user._id);
 };
@@ -309,16 +313,21 @@ const listThreads = async ({ user }) => {
 
 const getThread = async ({ user, threadId }) => view(await threadFor(threadId, user._id), user._id);
 
-/** Messages, oldest first. `after` returns only newer ones (with a 2 s overlap; the client dedupes). */
+/** Messages, oldest first. `after` returns only newer ones (with a 2 s overlap; the client
+ *  dedupes). Opening a thread returns its newest MESSAGE_PAGE, so a long chat opens at the end. */
+const MESSAGE_PAGE = 500;
 const listMessages = async ({ user, threadId, after }) => {
 	const t = await threadFor(threadId, user._id);
 	const since = after && !Number.isNaN(Date.parse(after)) ? new Date(Date.parse(after) - 2000) : null;
-	const msgs = await Message.find({
+	const query = {
 		threadId: t._id,
 		...(since && { createdAt: { $gt: since } }),
 		// Removed messages vanish for the other person; the sender still sees theirs.
 		$or: [{ 'moderation.state': { $nin: HIDDEN_STATES } }, { senderId: oid(user._id) }],
-	}).sort({ createdAt: 1 }).limit(500).lean();
+	};
+	const msgs = since
+		? await Message.find(query).sort({ createdAt: 1 }).limit(MESSAGE_PAGE).lean()
+		: (await Message.find(query).sort({ createdAt: -1 }).limit(MESSAGE_PAGE).lean()).reverse();
 	return msgs.map((m) => serializeMessage(m, user._id));
 };
 
@@ -350,5 +359,5 @@ const forgetChats = async (userId) => {
 
 module.exports = {
 	startThread, sendMessage, accept, decline, markRead, reveal, revealOnCommit, block,
-	listThreads, getThread, listMessages, chatSummary, forgetChats, ChatError, LINK_RE, peopleFor, postEvent,
+	listThreads, getThread, listMessages, chatSummary, forgetChats, ChatError, LINK_RE, peopleFor, postEvent, alreadyNamedTo,
 };

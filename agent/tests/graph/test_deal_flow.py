@@ -93,3 +93,11 @@ async def test_an_empty_profile_batch_does_not_hold_back_the_first_real_one(fake
     fake_node.match_people[uid] = {**person, "interests": ["climate"]}
     view = await deal_flow.current(uid, "Investor")
     assert view["need"] is None and len(view["matches"]) == 5, "sectors added: matches right away, not in 7 days"
+
+
+async def test_two_first_opens_at_once_make_one_batch(pool):
+    import asyncio
+    a, b = await asyncio.gather(deal_flow.current(INV, "Investor"), deal_flow.current(INV, "Investor"))
+    assert a["batch"]["id"] == b["batch"]["id"]
+    assert await db.col("agent_match_batches").count_documents({"user_id": INV}) == 1
+    assert len(a["matches"]) == a["batch"]["size"] == 5

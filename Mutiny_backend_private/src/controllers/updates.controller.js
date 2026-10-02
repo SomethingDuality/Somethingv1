@@ -114,8 +114,11 @@ const request_update = async (req, res) => {
 		if (already) {
 			return res.status(200).json({ success: true, sent: false, message: 'You already asked this week' });
 		}
-		const investor = await BaseUser.findById(req.user._id).select('name').lean();
-		await pushNotification(idea.founder_id, `${investor?.name || 'An investor'} asked for an update on “${idea.title}”`, { key, link: ideaLink('founder', idea._id) });
+		// Ghost Mode (C5): an investor the founder hasn't been told about stays "An investor" here too.
+		const investor = await BaseUser.findById(req.user._id).select('name ghostMode').lean();
+		const named = investor?.ghostMode === false || await require('../chat/chat.service.js').alreadyNamedTo(req.user._id, idea.founder_id);
+		const who = named && investor?.name ? investor.name : 'An investor';
+		await pushNotification(idea.founder_id, `${who} asked for an update on “${idea.title}”`, { key, link: ideaLink('founder', idea._id) });
 		return res.status(200).json({ success: true, sent: true });
 	} catch (err) {
 		console.error('request_update:', err);

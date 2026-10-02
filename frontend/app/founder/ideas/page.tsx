@@ -89,28 +89,29 @@ const ideasAPI = {
       pending.map(async (att) => {
         const fd = new FormData()
         fd.append("file", att.file!)
-        const res = await apiClient.post<{ attachment: { url: string; name: string } }>(
+        const res = await apiClient.post<{ attachment: Attachment }>(
           `/ideas/${idea.id}/attachments`,
           fd,
           { headers: { "Content-Type": "multipart/form-data" } }
         )
-        const match = idea.attachments?.find((a) => a.name === att.name)
-        if (match) match.url = res.data.attachment.url
+        // The server stores a file only through this upload, so add what it returns.
+        ;(idea.attachments ??= []).push(res.data.attachment)
       })
     )
     return pending.filter((_, i) => results[i].status === "rejected").map((a) => a.name)
   },
 
   async createIdea(data: IdeaFormData): Promise<SaveResult> {
-    const metaOnly = (data.attachments || []).map(({ file: _f, ...rest }) => rest)
-    const response = await apiClient.post("/ideas", { ...data, attachments: metaOnly })
+    const { attachments: _files, ...fields } = data
+    const response = await apiClient.post("/ideas", fields)
     const idea: Idea = { ...normalize(response.data), isYours: true }
     return { idea, failedUploads: await ideasAPI.uploadFiles(idea, data.attachments) }
   },
 
   async updateIdea(id: string, data: IdeaFormData): Promise<SaveResult> {
-    const metaOnly = (data.attachments || []).map(({ file: _f, ...rest }) => rest)
-    const response = await apiClient.put(`/ideas/${id}`, { ...data, attachments: metaOnly })
+    // The files already uploaded that the founder kept (by URL); dropped ones are deleted.
+    const kept = (data.attachments || []).filter((a) => a.url).map(({ file: _f, ...rest }) => rest)
+    const response = await apiClient.put(`/ideas/${id}`, { ...data, attachments: kept })
     const idea: Idea = { ...normalize(response.data), isYours: true }
     return { idea, failedUploads: await ideasAPI.uploadFiles(idea, data.attachments) }
   },
@@ -119,6 +120,58 @@ const ideasAPI = {
     await apiClient.delete(`/ideas/${id}`)
   },
 
+}
+
+// Outside the page: defined inside, every keystroke in the search made a new component type and
+// remounted every card.
+function IdeaRow({ idea, onEdit, onSupported }: {
+  idea: Idea
+  onEdit: (idea: Idea) => void
+  onSupported: (ideaId: string, next: { supported: boolean; count: number }) => void
+}) {
+  const pill = "rounded-full border border-line px-3 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground cursor-pointer"
+  return (
+    <li>
+      <IdeaCard
+        href={`/founder/ideas/${idea.id}`}
+        idea={{
+          id: idea.id,
+          title: idea.title,
+          description: idea.desc || idea.description,
+          sectors: idea.tags,
+          stage: idea.stage,
+          raising: idea.raising,
+          author: idea.isYours ? undefined : idea.author,
+          createdAt: idea.createdAt,
+          milestones: idea.milestones,
+          isDraft: idea.isDraft,
+          moderation: idea.isYours ? idea.moderation?.state : undefined,
+        }}
+        action={
+          idea.isYours ? (
+            <button type="button" onClick={() => onEdit(idea)} className={pill}>Edit</button>
+          ) : (
+            <SupportButton
+              ideaId={idea.id}
+              supported={idea.supportedByMe}
+              count={idea.likes}
+              size="sm"
+              onChange={(next) => onSupported(idea.id, next)}
+            />
+          )
+        }
+      />
+      <p className="mt-2 flex flex-wrap gap-x-4 text-xs text-muted-foreground">
+        <span>{countOf(idea.likes, "supporter")}</span>
+        <span>{countOf(idea.comments, "comment")}</span>
+        <span>{countOf(idea.views, "view")}</span>
+        {idea.attachments && idea.attachments.length > 0 && <span>{countOf(idea.attachments.length, "file")}</span>}
+        {idea.lookingFor && idea.lookingFor.length > 0 && (
+          <span>Looking for {idea.lookingFor.map((r) => labelFor("roles", r)).join(", ")}</span>
+        )}
+      </p>
+    </li>
+  )
 }
 
 // ---------- Component ----------
@@ -290,52 +343,6 @@ export default function FounderIdeasPage() {
     setDiscoverIdeas(apply)
   }
 
-  function IdeaRow({ idea }: { idea: Idea }) {
-    const pill = "rounded-full border border-line px-3 py-1 text-xs text-muted-foreground transition-colors hover:text-foreground cursor-pointer"
-    return (
-      <li>
-        <IdeaCard
-          href={`/founder/ideas/${idea.id}`}
-          idea={{
-            id: idea.id,
-            title: idea.title,
-            description: idea.desc || idea.description,
-            sectors: idea.tags,
-            stage: idea.stage,
-            raising: idea.raising,
-            author: idea.isYours ? undefined : idea.author,
-            createdAt: idea.createdAt,
-            milestones: idea.milestones,
-            isDraft: idea.isDraft,
-            moderation: idea.isYours ? idea.moderation?.state : undefined,
-          }}
-          action={
-            idea.isYours ? (
-              <button type="button" onClick={() => handleEditClick(idea)} className={pill}>Edit</button>
-            ) : (
-              <SupportButton
-                ideaId={idea.id}
-                supported={idea.supportedByMe}
-                count={idea.likes}
-                size="sm"
-                onChange={(next) => handleSupported(idea.id, next)}
-              />
-            )
-          }
-        />
-        <p className="mt-2 flex flex-wrap gap-x-4 text-xs text-muted-foreground">
-          <span>{countOf(idea.likes, "supporter")}</span>
-          <span>{countOf(idea.comments, "comment")}</span>
-          <span>{countOf(idea.views, "view")}</span>
-          {idea.attachments && idea.attachments.length > 0 && <span>{countOf(idea.attachments.length, "file")}</span>}
-          {idea.lookingFor && idea.lookingFor.length > 0 && (
-            <span>Looking for {idea.lookingFor.map((r) => labelFor("roles", r)).join(", ")}</span>
-          )}
-        </p>
-      </li>
-    )
-  }
-
   const tabClass = (on: boolean) =>
     cn("text-[15px] transition-colors cursor-pointer", on ? "text-foreground" : "text-muted-foreground hover:text-foreground")
   const chip = (on: boolean) =>
@@ -433,7 +440,7 @@ export default function FounderIdeasPage() {
         ) : (
           <ul className="grid gap-x-8 gap-y-12 sm:grid-cols-2 xl:grid-cols-3">
             {filtered.map((idea) => (
-              <IdeaRow key={idea.id} idea={idea} />
+              <IdeaRow key={idea.id} idea={idea} onEdit={handleEditClick} onSupported={handleSupported} />
             ))}
           </ul>
         )}

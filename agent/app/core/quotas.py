@@ -33,34 +33,57 @@ def _key(user_id: str, feature: str, day: str) -> str:
     return f"{user_id}:{feature}:{day}"
 
 
+TZ_CHANGE_AFTER = timedelta(days=30)
+
+
+async def pinned_tz(user_id: str, tz: str | None) -> str:
+    """The time zone a user's day is counted in. The browser sends it, so it's pinned: switching
+    zones would otherwise open a fresh "today" up to three times in one real day. It follows a
+    real move once a month."""
+    want = tz if tz and _zone(tz) is not timezone.utc else "UTC"
+    col, now = db.col("agent_quotas"), datetime.now(timezone.utc)
+    try:
+        doc = await col.find_one_and_update(
+            {"_id": f"{user_id}:tz"}, {"$setOnInsert": {"tz": want, "at": now, "user_id": user_id}},
+            upsert=True, return_document=True,
+        )
+    except DuplicateKeyError:  # created by a parallel request
+        doc = await col.find_one({"_id": f"{user_id}:tz"})
+    if doc["tz"] != want and doc["at"] < now - TZ_CHANGE_AFTER:
+        await col.update_one({"_id": doc["_id"], "at": doc["at"]}, {"$set": {"tz": want, "at": now}})
+        return want
+    return doc["tz"]
+
+
 async def peek(user_id: str, feature: str, limit: int, tz: str | None = None) -> dict:
-    day, resets = day_window(tz)
+    day, resets = day_window(await pinned_tz(user_id, tz))
     doc = await db.col("agent_quotas").find_one({"_id": _key(user_id, feature, day)})
     return {"used": (doc or {}).get("used", 0), "limit": limit, "resetsAt": resets.isoformat()}
 
 
 async def consume(user_id: str, feature: str, limit: int, tz: str | None = None) -> dict:
-    day, resets = day_window(tz)
+    """Takes one use of today's quota. The result's `day` is what `refund` needs."""
+    day, resets = day_window(await pinned_tz(user_id, tz))
     key = _key(user_id, feature, day)
     quotas = db.col("agent_quotas")
+    take = {"$inc": {"used": 1}}
     try:
         doc = await quotas.find_one_and_update(
             {"_id": key, "used": {"$lt": limit}},
-            {"$inc": {"used": 1}, "$setOnInsert": {"user_id": user_id, "feature": feature, "expires_at": resets + timedelta(days=2)}},
-            upsert=True,
-            return_document=True,
+            {**take, "$setOnInsert": {"user_id": user_id, "feature": feature, "expires_at": resets + timedelta(days=2)}},
+            upsert=True, return_document=True,
         )
     except DuplicateKeyError:
-        # The day's row exists and is already at the limit, so the upsert tried to insert a twin.
-        doc = None
+        # The row exists: either at the limit, or a parallel first request just created it.
+        doc = await quotas.find_one_and_update({"_id": key, "used": {"$lt": limit}}, take, return_document=True)
     if not doc:
         raise QuotaExceeded(used=limit, limit=limit, resetsAt=resets.isoformat())
-    return {"used": doc["used"], "limit": limit, "resetsAt": resets.isoformat()}
+    return {"used": doc["used"], "limit": limit, "resetsAt": resets.isoformat(), "day": day}
 
 
-async def refund(user_id: str, feature: str, tz: str | None = None) -> None:
-    """Give a use back when the failure was ours (the founder shouldn't lose a review to a 503)."""
-    day, _ = day_window(tz)
+async def refund(user_id: str, feature: str, day: str) -> None:
+    """Give a use back when the failure was ours (the founder shouldn't lose a review to a 503).
+    `day` is the one the use was taken from, even if the founder's day has changed since."""
     await db.col("agent_quotas").update_one({"_id": _key(user_id, feature, day), "used": {"$gt": 0}}, {"$inc": {"used": -1}})
 
 

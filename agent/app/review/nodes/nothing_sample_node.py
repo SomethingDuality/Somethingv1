@@ -1,7 +1,10 @@
 """One of three independent Nothing reviews (R7: Sonnet, samples aggregated in code). Fresh context:
 only the brief, the evidence on record and the assumptions, in an order shuffled per sample to
 reduce position bias. The rubric and anchors are a cached prefix; the idea comes after it.
-A sample that fails is recorded as failed; aggregate needs at least two usable ones."""
+A sample that fails is recorded as failed; aggregate needs at least two usable ones. A sample
+retries an outage once itself (the graph's retry would fail the whole review instead), and each
+attempt is time-boxed inside the node's 240 s, so a slow sample fails alone."""
+import asyncio
 import json
 import random
 from functools import lru_cache
@@ -9,7 +12,7 @@ from pathlib import Path
 
 from langchain_core.runnables import RunnableConfig
 
-from app.core.errors import AgentError
+from app.core.errors import AgentError, ProviderUnavailable
 from app.core.log import warn
 from app.models import llm
 from app.review.categories import BY_ID
@@ -19,6 +22,8 @@ from app.utils.ctx import llm_ctx
 from app.utils.progress import progress
 
 ANCHORS = Path(__file__).resolve().parents[1] / "anchors" / "anchors_v1.json"
+ATTEMPTS = 2
+ATTEMPT_TIMEOUT = 110.0  # two attempts and a pause fit inside the node's 240 s
 
 
 @lru_cache
@@ -42,10 +47,21 @@ async def nothing_sample_node(payload: dict, config: RunnableConfig) -> dict:
     )
     prompt = llm.Prompt(id="review.nothing", version="review.nothing.v1", system=rubric(), user=user,
                         fake_input={"brief": brief, "assumptions": assumptions, "evidence": evidence, "sample_idx": i})
-    try:
-        out = await llm.structured(prompt, CritiqueSample, tier="sonnet", user_text=True, max_tokens=8000, effort="medium",
-                                   ctx=llm_ctx(config, "review", "nothing", payload["user_id"], review_id=payload["review_id"]))
-    except AgentError as e:
-        warn("review.sample_failed", review=payload["review_id"], sample=i, code=e.code)
-        return {"nothing_samples": [{"sample_idx": i, "failed": True, "code": e.code}]}
-    return {"nothing_samples": [{"sample_idx": i, "assessments": [a.model_dump() for a in out.assessments]}]}
+    ctx = llm_ctx(config, "review", "nothing", payload["user_id"], review_id=payload["review_id"])
+    for attempt in range(ATTEMPTS):
+        try:
+            out = await asyncio.wait_for(llm.structured(prompt, CritiqueSample, tier="sonnet", user_text=True, max_tokens=8000,
+                                                        effort="medium", ctx=ctx), ATTEMPT_TIMEOUT)
+            return {"nothing_samples": [{"sample_idx": i, "assessments": [a.model_dump() for a in out.assessments]}]}
+        except ProviderUnavailable as e:
+            if attempt + 1 < ATTEMPTS:
+                await asyncio.sleep(2.0)
+                continue
+            code = e.code
+        except AgentError as e:
+            code = e.code
+        except Exception as e:  # noqa: BLE001 - a timeout or a bug fails this sample, not the review
+            code = "timeout" if isinstance(e, TimeoutError) else "internal"
+        warn("review.sample_failed", review=payload["review_id"], sample=i, code=code, attempt=attempt + 1)
+        return {"nothing_samples": [{"sample_idx": i, "failed": True, "code": code}]}
+    return {"nothing_samples": [{"sample_idx": i, "failed": True, "code": "internal"}]}

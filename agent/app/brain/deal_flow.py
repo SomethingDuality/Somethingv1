@@ -10,14 +10,15 @@
 
 The first batch is made when the person first opens it; after that the scheduler makes one every
 7 days and sends a notification when there is something in it."""
+import asyncio
 import uuid
 from datetime import datetime, timedelta, timezone
 
 from app.brain import packets
 from app.brain.matcher import get_matcher, similarity
 from app.brain.vectors import vectors
-from app.core import db, jobs, node_client
-from app.core.errors import InvalidInput, NotFound
+from app.core import db, jobs, locks, node_client
+from app.core.errors import InvalidInput, NotFound, ProviderUnavailable
 from app.core.log import log
 from app.core.settings import get_settings
 from app.shared import taxonomy
@@ -42,7 +43,22 @@ async def _pool(person: dict) -> list[dict]:
 
 
 async def build_batch(user_id: str, *, reason: str = "weekly") -> dict:
-    """Makes (or returns) this person's batch. Idempotent per cadence window."""
+    """Makes (or returns) this person's batch. Idempotent per cadence window, and one at a time per
+    person: two first opens at once would otherwise make two batches (the second one empty)."""
+    key, owner = f"deal:{user_id}", uuid.uuid4().hex
+    for _ in range(100):
+        if await locks.acquire(key, owner, ttl_s=60, user_id=user_id):
+            break
+        await asyncio.sleep(0.1)
+    else:
+        raise ProviderUnavailable("deal flow is busy for this person")
+    try:
+        return await _build_batch(user_id, reason)
+    finally:
+        await locks.release(key, owner)
+
+
+async def _build_batch(user_id: str, reason: str) -> dict:
     s = get_settings()
     raw = await node_client.match_user(user_id)
     person = packets.person_packet(raw)
@@ -65,14 +81,18 @@ async def build_batch(user_id: str, *, reason: str = "weekly") -> dict:
         matches = await get_matcher().ideas_for(person, pool, sims, s.match_batch_size)
         by_id = {i["id"]: i for i in pool}
         now = _now()
+        inserted = []
         for rank, m in enumerate(matches, 1):
             i = by_id[m.idea_id]
-            await db.col("agent_matches").update_one({"user_id": user_id, "idea_id": m.idea_id}, {"$setOnInsert": {
+            res = await db.col("agent_matches").update_one({"user_id": user_id, "idea_id": m.idea_id}, {"$setOnInsert": {
                 "_id": uuid.uuid4().hex, "batch_id": batch_id, "audience": person["role"].lower(), "rank": rank,
                 "score": m.score, "parts": m.parts, "reasons": m.reasons, "matcher": get_matcher().name,
                 "idea": {k: i[k] for k in ("title", "description", "sectors", "stage", "raising", "looking_for", "founder_location")},
                 "status": "new", "created_at": now,
             }}, upsert=True)
+            if res.upserted_id is not None:
+                inserted.append(m)
+        matches = inserted  # the batch's size is what it really holds
     batch = {
         "_id": batch_id, "user_id": user_id, "role": person["role"], "reason": reason, "created_at": _now(),
         "size": len(matches), "ready": person["ready"], "matcher": get_matcher().name, "packet_version": packets.PACKET_VERSION,
@@ -165,7 +185,8 @@ async def schedule_batches() -> int:
             for uid in ids:
                 if uid in last and last[uid] > due_before:
                     continue
-                window = (last.get(uid) or _now()).strftime("%Y%m%d")
+                # Due again: once per cadence. Never matched yet (profile not ready): once a week, not daily.
+                window = last[uid].strftime("%Y%m%d") if uid in last else _now().strftime("w%G%V")
                 if await jobs.enqueue("deal_flow_batch", f"m:{uid}", user_id=uid, payload={"user_id": uid},
                                       dedupe_key=f"deal-flow:{uid}:{window}"):
                     queued += 1

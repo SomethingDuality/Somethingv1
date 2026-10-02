@@ -38,12 +38,15 @@ async def request_confirm_node(state: MemoryWriteState, config: RunnableConfig) 
         ctx = await node_client.context(scope["user_id"], idea_id=scope["idea_id"], purpose="memory")
         idea_title = (ctx.get("idea") or {}).get("fields", {}).get("title")
     prompt = confirm_prompt(slot, current, cand.get("value"), idea_title)
+    # run_id is always the current run's: a job retried after a failed run asks again from a new run,
+    # and the founder's answer must resume that one, not the dead one.
     await db.col("agent_pending_confirms").update_one(
         {"_id": confirm_id},
-        {"$setOnInsert": {
+        {"$set": {"run_id": run_id},
+         "$setOnInsert": {
             "user_id": scope["user_id"], "idea_id": scope.get("idea_id"), "scope_key": scope["scope_key"],
             "slot_key": slot.key, "old_value": current, "new_value": cand.get("value"), "prompt": prompt,
-            "run_id": run_id, "status": "open", "expires_at": expires, "created_at": datetime.now(timezone.utc),
+            "status": "open", "expires_at": expires, "created_at": datetime.now(timezone.utc),
         }},
         upsert=True,
     )

@@ -19,8 +19,8 @@ from typing import Literal, TypeVar
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel
 
-from app.core import usage
-from app.core.errors import AllProvidersFailed, JudgeRefused, ProviderUnavailable, Truncated
+from app.core import quotas, usage
+from app.core.errors import AllProvidersFailed, BudgetPaused, JudgeRefused, Truncated, Unusable
 from app.core.log import warn
 from app.core.settings import get_settings
 from app.models import fake
@@ -34,6 +34,9 @@ HEAVY_EVEN = [("cerebras", "llama-3.3-70b"), ("sambanova", "Meta-Llama-3.3-70B-I
 HEAVY_ODD = [("sambanova", "Meta-Llama-3.3-70B-Instruct"), ("groq", "llama-3.3-70b-versatile"), ("cerebras", "llama-3.3-70b"), ("google", "gemini-2.5-flash")]
 LITE = [("groq", "llama-3.1-8b-instant"), ("cerebras", "llama-3.1-8b"), ("sambanova", "Meta-Llama-3.1-8B-Instruct"), ("google", "gemini-2.5-flash")]
 CHAINS = {"heavy": HEAVY, "heavy_even": HEAVY_EVEN, "heavy_odd": HEAVY_ODD, "lite": LITE}
+# The free providers are fast; a slow one is skipped for the next instead of holding the chain
+# (their default is to wait up to 10 minutes).
+FREE_TIMEOUT = 15.0
 
 
 @dataclass
@@ -80,21 +83,24 @@ def _client(provider: str, model: str, max_tokens: int, effort: str | None, temp
     s = get_settings()
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
-        kw = {"model": model, "max_tokens": max_tokens, "api_key": s.anthropic_api_key, "max_retries": 2, "timeout": 120}
+        # Two attempts must fit inside the calling node's timeout (memory 90 s, review 240 s), or
+        # the node times out first and the work is thrown away: ~40 s for a short judge, 110 s at most.
+        timeout = min(110.0, 30.0 + max_tokens / 50)
+        kw = {"model": model, "max_tokens": max_tokens, "api_key": s.anthropic_api_key, "max_retries": 1, "timeout": timeout}
         if effort and not model.startswith("claude-haiku"):
             kw["reasoning_effort"] = effort  # Haiku 4.5 rejects effort
         return ChatAnthropic(**kw)
     if provider == "groq":
         from langchain_groq import ChatGroq
-        return ChatGroq(model=model, api_key=s.groq_api_key, max_retries=0, max_tokens=max_tokens, temperature=temperature if temperature is not None else 0.7)
+        return ChatGroq(model=model, api_key=s.groq_api_key, max_retries=0, timeout=FREE_TIMEOUT, max_tokens=max_tokens, temperature=temperature if temperature is not None else 0.7)
     if provider in ("cerebras", "sambanova"):
         from langchain_openai import ChatOpenAI
         base = {"cerebras": "https://api.cerebras.ai/v1", "sambanova": "https://api.sambanova.ai/v1"}[provider]
         key = s.cerebras_api_key if provider == "cerebras" else s.sambanova_api_key
-        return ChatOpenAI(model=model, api_key=key, base_url=base, max_retries=0, max_tokens=max_tokens, temperature=temperature if temperature is not None else 0.7)
+        return ChatOpenAI(model=model, api_key=key, base_url=base, max_retries=0, timeout=FREE_TIMEOUT, max_tokens=max_tokens, temperature=temperature if temperature is not None else 0.7)
     if provider == "google":
         from langchain_google_genai import ChatGoogleGenerativeAI
-        return ChatGoogleGenerativeAI(model=model, google_api_key=s.google_api_key, max_retries=0, max_output_tokens=max_tokens)
+        return ChatGoogleGenerativeAI(model=model, google_api_key=s.google_api_key, max_retries=0, timeout=FREE_TIMEOUT, max_output_tokens=max_tokens)
     raise ValueError(f"unknown provider {provider}")
 
 
@@ -133,7 +139,7 @@ async def _one(provider: str, model: str, prompt: Prompt, schema, *, max_tokens:
         raise Truncated(prompt.id)
     if perr is not None or parsed is None:
         await usage.record(ctx, provider=provider, model=model, tokens=tokens, latency_ms=latency, outcome="error", error_class="parse", effort=effort)
-        raise ProviderUnavailable(f"{prompt.id}: unparseable output from {provider}")
+        raise Unusable(f"{prompt.id}: unparseable output from {provider}")
     await usage.record(ctx, provider=provider, model=model, tokens=tokens, latency_ms=latency, effort=effort)
     return parsed
 
@@ -149,14 +155,18 @@ async def _run(prompt: Prompt, schema, *, tier: Tier, ctx: dict, user_text: bool
     causes: list[str] = []
     for provider, model in route:
         try:
+            if provider == "anthropic":
+                await quotas.check_budget()  # every paid call, not only at a review's start (memory jobs, rulings)
             return await _one(provider, model, prompt, schema, max_tokens=max_tokens, effort=effort, temperature=temperature, ctx=ctx)
-        except JudgeRefused:
-            raise  # a refusal is an answer, not an outage: don't shop it around
+        except (JudgeRefused, BudgetPaused):
+            raise  # a refusal is an answer, and a paused budget isn't an outage: don't shop them around
         except Exception as e:  # noqa: BLE001 - every provider failure is logged, then the next one is tried
             causes.append(f"{provider}/{model}: {type(e).__name__}")
             warn("llm.failover", prompt=prompt.id, provider=provider, model=model, error=type(e).__name__)
             await usage.record(ctx, provider=provider, model=model, outcome="failover", error_class=type(e).__name__)
             if tier in ("haiku", "sonnet", "opus"):
+                if isinstance(e, Unusable):
+                    raise  # cut off or unparseable: not an outage, so not retried by the graph either
                 break
     raise AllProvidersFailed(causes)
 

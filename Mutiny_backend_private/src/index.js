@@ -63,7 +63,12 @@ let internalServer = null;
 
 const gracefulShutdown = async (signal) => {
 	console.log(`[${signal}] Shutting down...`);
-	if (server) await new Promise((resolve) => server.close(resolve));
+	require('./agent/sse.js').closeAll(); // open review streams would keep the server open forever
+	if (server) {
+		const closed = new Promise((resolve) => server.close(resolve));
+		server.closeIdleConnections();
+		await closed;
+	}
 	if (internalServer) await new Promise((resolve) => internalServer.close(resolve));
 	await Promise.allSettled([
 		stopConsumer(),
@@ -91,6 +96,8 @@ mongoose
 			internalServer = internalApp.listen(INTERNAL_PORT, '127.0.0.1', () => {
 				console.log(`[Internal] agent API on 127.0.0.1:${INTERNAL_PORT}`);
 			});
+			// A taken port must not crash the API: the agent bridge is off until it's fixed.
+			internalServer.on('error', (err) => console.error(`[Internal] agent API not started (${err.code || err.message})`));
 		} else {
 			console.log('[Internal] agent API off (AGENT_TO_NODE_KEY not set)');
 		}

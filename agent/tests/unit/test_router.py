@@ -12,7 +12,9 @@ from app.router.classify import classify, classify_turn
     ("How do I find five canteen managers?", True, "about_this"),
     ("We have 3 paying canteens now", True, "about_this"),
     ("I have a new idea: an app for renting cycles on campus by the hour, unlocked with a QR code", True, "new_idea"),
-    (" ".join(["word"] * 40), True, "new_idea"),
+    (" ".join(["word"] * 40), True, "unsure"),  # long statements in a chat go to the refine, never straight to a review
+    ("This week we signed four more canteens in Kothrud and Baner, two of them pay per kilo and two pay a flat monthly fee, "
+     "and the pickup van now runs twice a day because the managers asked for it after the first week", True, "unsure"),
     ("Canteens in Pune said they would pay more if pickup happened twice a day instead of once", True, "unsure"),
     ("Composting for canteens, paid per kilo collected.", False, "new_idea"),
     ("hello", False, "general"),

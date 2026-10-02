@@ -83,3 +83,40 @@ def test_r12_high_stakes_needs_confirm_unless_founder_typed_it():
     assert decide(cand(slot_key="idea.stage", value="mvp", user_direct=True), [n], j("changes"))["needs_confirm"] is False
     assert decide(cand(slot_key="idea.target_customer", value="x"), [], [])["needs_confirm"] is False  # not high stakes
     assert decide(cand(slot_key="idea.stage", value="mvp"), [], [])["needs_confirm"] is True  # first value, inferred
+
+
+def test_a_slot_change_is_decided_before_a_free_note_that_reads_the_same():
+    """A same-slot "changes" must win over a free-form "same" (otherwise NOOP, and the change is lost)."""
+    slot_note = note("n1", same_slot=True, slot_key="idea.stage", value="prototype")
+    free_note = note("n2", same_slot=False)
+    d = decide(cand(slot_key="idea.stage", value="mvp", user_direct=True), [slot_note, free_note],
+               j("changes", "n1") + j("same", "n2"))
+    assert (d["op"], d["target_note_ids"]) == ("INVALIDATE", ["n1"])
+
+
+def test_an_option_never_replaces_a_decided_value():
+    n = note(same_slot=True, slot_key="idea.business_model", value="subscription")
+    for rel in ("refines", "changes"):
+        d = decide(cand(slot_key="idea.business_model", value="marketplace", modality="considering"), [n], j(rel))
+        assert d["op"] == "ADD_OPTION" and d["needs_confirm"] is False, rel
+
+
+def test_free_form_dates_never_freeze_a_slot():
+    n = note(same_slot=True, slot_key="idea.pricing", value="₹10 per kilo", valid_at="March 2026")
+    d = decide(cand(slot_key="idea.pricing", value="₹15 per kilo", user_direct=True), [n], j("changes"))
+    assert d["op"] == "INVALIDATE"
+
+
+def test_slotless_or_other_scope_changes_never_empty_a_slot_or_cross_scopes():
+    pricing = note(same_slot=False, slot_key="idea.pricing", value="₹10 per kilo", scope_key="i:x")
+    d = decide(cand(), [pricing], j("changes"), scope_key="i:x")
+    assert d["op"] == "ADD_CONFLICT" and d["rule"] == "slotless_change" and d["target_note_ids"] == []
+    location = note(same_slot=True, slot_key="founder.location", value="Pune", scope_key="f:u1")
+    d = decide(cand(slot_key="founder.location", value="Bangalore", user_direct=True), [location], j("changes"), scope_key="i:x")
+    assert d["op"] == "ADD_CONFLICT" and d["rule"] == "other_scope"
+
+
+def test_r12_also_guards_a_high_stakes_target():
+    n = note(same_slot=True, slot_key="idea.pricing", value="₹10 per kilo")
+    d = decide(cand(slot_key="idea.pricing", value="₹15 per kilo"), [n], j("refines"))
+    assert d["op"] == "UPDATE" and d["needs_confirm"] is True

@@ -6,8 +6,14 @@ export type SSEEvent = { id: string | null; event: string; data: string }
 
 export class SSEParser {
   private buffer = ""
+  // The last chunk ended in "\r": a "\n" starting the next one is the same line ending, not a
+  // blank line (which would end the event early).
+  private afterCR = false
 
   push(chunk: string): SSEEvent[] {
+    if (!chunk) return []
+    if (this.afterCR && chunk.startsWith("\n")) chunk = chunk.slice(1)
+    this.afterCR = chunk.endsWith("\r")
     this.buffer += chunk.replace(/\r\n?/g, "\n")
     const events: SSEEvent[] = []
     let sep = this.buffer.indexOf("\n\n")

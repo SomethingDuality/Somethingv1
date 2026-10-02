@@ -49,7 +49,7 @@ class MemoryWriteState(TypedDict):
     decision: NotRequired[dict]
     confirm_id: NotRequired[str]
     confirm: NotRequired[dict]                 # the founder's answer: {choice: yes|change|skip|expired, value?}
-    outcome: NotRequired[str]                  # added | updated | invalidated | conflict | noop | duplicate | dropped
+    outcome: NotRequired[str]                  # added | added_option | added_historical | updated | invalidated | conflict | noop | duplicate | dropped
     written_note_ids: NotRequired[list[str]]
     flags: NotRequired[Annotated[list[str], operator.add]]
     status: NotRequired[str]

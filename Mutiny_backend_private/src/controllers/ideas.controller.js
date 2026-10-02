@@ -1,4 +1,8 @@
 const mongoose = require('mongoose');
+const fs = require('fs');
+const path = require('path');
+const contentDisposition = require('content-disposition');
+const uploads = require('../utils/uploads.js');
 const { Idea }    = require('../models/ideas.model.js');
 const { Founder, BaseUser } = require('../models/user.model.js');
 const { Team } = require('../models/team.model.js');
@@ -12,9 +16,11 @@ const { respondLikeError } = require('./feed.controller.js');
 const { FIELDS, FieldError, sourceKey, isAnswered } = require('../profile/fields.js');
 const { PUBLIC_IDEA, canSeeIdea, moderationFor } = require('../community/targets.js');
 const { checkText, BLOCKED } = require('../community/filter.js');
+const { isAdmin } = require('../middleware/admin.middleware.js');
 
 // Moderation details stay on the server; the author only learns that their item is hidden.
 const withoutModeration = ({ moderation, ...rest }) => rest;
+const IDEAS_PER_DAY = 3;
 
 // Validates/normalizes idea fields through the shared registry (tags → sector ids, roles → role ids)
 // and records where each value came from, like profile/applyUpdate.js does for users.
@@ -126,9 +132,11 @@ const fetch_idea_by_id = async (req, res) => {
 
 	try {
 		const idea = await Idea.findById(id).lean();
-		// Drafts and hidden ideas are visible only to their founder; everyone else gets the same
-		// 404 as a missing idea.
-		if (!canSeeIdea(idea, req.user?._id)) {
+		// Drafts and hidden ideas are visible only to their founder (and, when hidden, to an admin
+		// reviewing it from the queue); everyone else gets the same 404 as a missing idea.
+		const adminReview = idea && !idea.isDraft && req.user && !canSeeIdea(idea, req.user._id)
+			&& isAdmin(await BaseUser.findById(req.user._id).select('email emailVerified').lean());
+		if (!canSeeIdea(idea, req.user?._id) && !adminReview) {
 			return res.status(404).json({ success: false, message: 'Idea not found' });
 		}
 
@@ -189,8 +197,7 @@ const create_idea = async (req, res) => {
 		lookingFor,
 		raising,
 		isDraft,
-		attachments
-	} = req.body;
+	} = req.body || {};
 
 	// Only a title and a description are required; the Something box asks for the rest later.
 	if (!title || !description) {
@@ -218,15 +225,15 @@ const create_idea = async (req, res) => {
 			return res.status(403).json({ success: false, message: 'Founder account required' });
 		}
 
-		const startOfToday = new Date();
-		startOfToday.setHours(0, 0, 0, 0);
-
-		const todayCount = await Idea.countDocuments({
-			founder_id: user_id,
-			createdAt: { $gte: startOfToday }
-		});
-
-		if (todayCount >= 3) {
+		// One conditional write takes today's slot (X-45: counting then saving let parallel posts
+		// through). The day is UTC, the same for every server.
+		const day = new Date().toISOString().slice(0, 10);
+		const slot = await Founder.updateOne(
+			{ _id: user_id, $or: [{ 'ideaQuota.day': { $ne: day } }, { 'ideaQuota.count': { $lt: IDEAS_PER_DAY } }] },
+			[{ $set: { ideaQuota: { day, count: { $cond: [{ $eq: ['$ideaQuota.day', day] }, { $add: ['$ideaQuota.count', 1] }, 1] } } } }],
+			{ updatePipeline: true },
+		);
+		if (slot.matchedCount !== 1) {
 			return res.status(429).json({
 				success: false,
 				message: 'You can only post 3 ideas per day'
@@ -245,13 +252,19 @@ const create_idea = async (req, res) => {
 			lookingFor:   v.lookingFor ?? [],
 			raising:      v.raising || '',
 			isDraft:      Boolean(v.isDraft),
-			attachments:  Array.isArray(attachments) ? attachments : [],
+			attachments:  [], // files come only through POST /ideas/:id/attachments (X-96)
 			fieldSources: Object.fromEntries(Object.entries(cleaned.sources).filter(([, v]) => v)),
 			...(words.verdict === 'review' && { moderation: { needsReview: true, flaggedTerms: words.terms } }),
 		});
 
-		await idea.save();
+		try {
+			await idea.save();
+		} catch (err) {
+			await Founder.updateOne({ _id: user_id, 'ideaQuota.day': day, 'ideaQuota.count': { $gt: 0 } }, { $inc: { 'ideaQuota.count': -1 } });
+			throw err;
+		}
 		await cache.del(`user_ideas:${user_id}`);
+		if (!idea.isDraft) await cache.dropPublicLists();
 
 		publishIdeaCreated({
 			ideaId:    idea._id.toString(),
@@ -281,7 +294,7 @@ const update_idea = async (req, res) => {
 		raising,
 		isDraft,
 		attachments
-	} = req.body;
+	} = req.body || {};
 
 	if (!mongoose.Types.ObjectId.isValid(id)) {
 		return res.status(400).json({ success: false, message: 'Invalid idea ID' });
@@ -308,7 +321,14 @@ const update_idea = async (req, res) => {
 		for (const [k, v] of Object.entries(cleaned.values)) idea[k] = v;
 		if (cleaned.values.description !== undefined) idea.desc = makeExcerpt(cleaned.values.description);
 		for (const [k, v] of Object.entries(cleaned.sources)) idea.set(`fieldSources.${k}`, v ?? undefined);
-		if (attachments !== undefined) idea.attachments = Array.isArray(attachments) ? attachments : [];
+		// The client can only keep or drop files the idea already has (by their URL); new files come
+		// through the upload route, and nothing it sends becomes a name or a path (X-6, X-96).
+		let dropped = [];
+		if (Array.isArray(attachments)) {
+			const keep = new Set(attachments.map((a) => (typeof a?.url === 'string' ? a.url : null)).filter(Boolean));
+			dropped = idea.attachments.filter((a) => !keep.has(a.url));
+			if (dropped.length) idea.attachments = idea.attachments.filter((a) => keep.has(a.url));
+		}
 
 		// The word filter runs whenever public text changes, or a draft is published.
 		const textChanged = cleaned.values.title !== undefined || cleaned.values.description !== undefined;
@@ -323,6 +343,9 @@ const update_idea = async (req, res) => {
 
 		await idea.save();
 		await cache.del(`user_ideas:${user_id}`);
+		if (wasDraft !== idea.isDraft) await cache.dropPublicLists(); // published or taken back
+		const dir = path.join(uploads.IDEAS_DIR, String(idea._id));
+		await Promise.all(dropped.map((a) => uploads.removeStored(dir, uploads.storedNameOf(a.url))));
 
 		publishIdeaUpdated({
 			ideaId:  id,
@@ -335,7 +358,7 @@ const update_idea = async (req, res) => {
 				...(lookingFor  !== undefined && { lookingFor:  idea.lookingFor }),
 				...(raising     !== undefined && { raising:     idea.raising }),
 				...(isDraft     !== undefined && { isDraft:     idea.isDraft }),
-				...(attachments !== undefined && { attachments: true }),
+				...(dropped.length > 0 && { attachments: true }),
 			},
 		});
 
@@ -399,98 +422,92 @@ const unlike_idea = async (req, res) => {
 
 
 
+// Runs after the route checked the owner and multer stored the file under a random name.
 const upload_attachment = async (req, res) => {
-	const user_id = req.user._id;
-	const { id }  = req.params;
-
-	if (!mongoose.Types.ObjectId.isValid(id)) {
-		return res.status(400).json({ success: false, message: 'Invalid idea ID' });
-	}
-
 	if (!req.file) {
 		return res.status(400).json({ success: false, message: 'No file uploaded' });
 	}
-
+	const ideaId = String(req.params.id);
+	const kind = uploads.ATTACHMENT_TYPES[req.file.mimetype].kind;
+	const attachment = {
+		// Display only: the stored file is req.file.filename; control characters never reach a page.
+		name: String(req.file.originalname || 'File').replace(/[\u0000-\u001f\u007f]/g, '').slice(0, 200) || 'File',
+		size: `${(req.file.size / (1024 * 1024)).toFixed(1)} MB`,
+		type: kind,
+		url:  `/uploads/ideas/${ideaId}/${req.file.filename}`,
+	};
 	try {
-		const idea = await Idea.findById(id);
-		if (!idea) {
-			return res.status(404).json({ success: false, message: 'Idea not found' });
+		// The owner and the cap again, atomically: two uploads at once can't pass one check.
+		const pushed = await Idea.updateOne(
+			{ _id: ideaId, founder_id: req.user._id, [`attachments.${uploads.MAX_ATTACHMENTS - 1}`]: { $exists: false } },
+			{ $push: { attachments: attachment } },
+		);
+		if (pushed.matchedCount !== 1) {
+			await fs.promises.unlink(req.file.path).catch(() => {});
+			return res.status(400).json({ success: false, message: `An idea can have up to ${uploads.MAX_ATTACHMENTS} files` });
 		}
-
-		if (idea.founder_id.toString() !== user_id.toString()) {
-			return res.status(403).json({ success: false, message: 'Not authorized to add attachments to this idea' });
-		}
-
-		
-		const mimeToType = {
-			'application/pdf':                                                         'document',
-			'application/msword':                                                      'document',
-			'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'document',
-			'application/vnd.ms-powerpoint':                                           'presentation',
-			'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'presentation',
-			'video/mp4': 'video', 'video/webm': 'video', 'video/quicktime': 'video',
-			'audio/mpeg': 'audio', 'audio/wav': 'audio', 'audio/ogg': 'audio',
-		};
-		const fileType = mimeToType[req.file.mimetype] || 'document';
-
-		
-		const fileUrl = `/uploads/ideas/${id}/${req.file.filename}`;
-
-		const attachment = {
-			name: req.file.originalname,
-			size: `${(req.file.size / (1024 * 1024)).toFixed(1)} MB`,
-			type: fileType,
-			url:  fileUrl,
-		};
-
-		idea.attachments.push(attachment);
-		await idea.save();
-
+		await cache.del(`user_ideas:${req.user._id}`);
 		return res.status(201).json({ success: true, attachment });
 	} catch (err) {
+		await fs.promises.unlink(req.file.path).catch(() => {});
 		console.error('upload_attachment:', err);
 		return res.status(500).json({ success: false, message: 'Internal server error' });
 	}
 };
 
-
-
+// `filename` is the stored name at the end of the attachment's URL; nothing else is accepted.
 const upload_attachment_delete = async (req, res) => {
-	const user_id    = req.user._id;
 	const { id, filename } = req.params;
-
-	if (!mongoose.Types.ObjectId.isValid(id)) {
+	if (!mongoose.isObjectIdOrHexString(id)) {
 		return res.status(400).json({ success: false, message: 'Invalid idea ID' });
 	}
-
+	if (!uploads.isStoredName(filename)) {
+		return res.status(404).json({ success: false, message: 'Attachment not found' });
+	}
 	try {
-		const idea = await Idea.findById(id);
-		if (!idea) {
-			return res.status(404).json({ success: false, message: 'Idea not found' });
-		}
-
-		if (idea.founder_id.toString() !== user_id.toString()) {
+		const idea = await Idea.findById(id).select('founder_id attachments').lean();
+		if (!idea) return res.status(404).json({ success: false, message: 'Idea not found' });
+		if (String(idea.founder_id) !== String(req.user._id)) {
 			return res.status(403).json({ success: false, message: 'Not authorized' });
 		}
-
-		const before = idea.attachments.length;
-		idea.attachments = idea.attachments.filter(a => a.name !== filename && !a.url?.endsWith(filename));
-
-		if (idea.attachments.length === before) {
+		const url = `/uploads/ideas/${idea._id}/${filename}`;
+		// Match on the attachment itself: timestamps make every update count as "modified".
+		const pulled = await Idea.updateOne({ _id: idea._id, 'attachments.url': url }, { $pull: { attachments: { url } } });
+		if (pulled.matchedCount !== 1) {
 			return res.status(404).json({ success: false, message: 'Attachment not found' });
 		}
-
-		await idea.save();
-
-		
-		const path = require('path');
-		const fs   = require('fs');
-		const filePath = path.join(__dirname, '../../uploads/ideas', id, filename);
-		fs.unlink(filePath, () => {});
-
+		await uploads.removeStored(path.join(uploads.IDEAS_DIR, String(idea._id)), filename);
+		await cache.del(`user_ideas:${req.user._id}`);
 		return res.status(200).json({ success: true, message: 'Attachment removed' });
 	} catch (err) {
 		console.error('delete_attachment:', err);
+		return res.status(500).json({ success: false, message: 'Internal server error' });
+	}
+};
+
+// Serves an attachment to someone who may see the idea (X-7, X-9): signed in, and the idea is
+// theirs or public. Only files the idea still lists are served, never with a sniffable type.
+const serve_attachment = async (req, res) => {
+	const { id, filename } = req.params;
+	if (!mongoose.isObjectIdOrHexString(id) || !uploads.isStoredName(filename)) {
+		return res.status(404).json({ success: false, message: 'File not found' });
+	}
+	try {
+		const idea = await Idea.findById(id).select('founder_id isDraft moderation attachments').lean();
+		const url = `/uploads/ideas/${id}/${filename}`;
+		const file = canSeeIdea(idea, req.user._id) && idea.attachments.find((a) => a.url === url);
+		if (!file) return res.status(404).json({ success: false, message: 'File not found' });
+		const inline = ['.pdf', '.mp4', '.webm', '.mov', '.mp3', '.wav', '.ogg'].includes(path.extname(filename));
+		res.set({
+			'X-Content-Type-Options': 'nosniff',
+			'Cache-Control': 'private, no-store',
+			'Content-Disposition': contentDisposition(file.name || filename, { type: inline ? 'inline' : 'attachment' }),
+		});
+		return res.sendFile(path.join(uploads.IDEAS_DIR, String(idea._id), filename), (err) => {
+			if (err && !res.headersSent) res.status(404).json({ success: false, message: 'File not found' });
+		});
+	} catch (err) {
+		console.error('serve_attachment:', err);
 		return res.status(500).json({ success: false, message: 'Internal server error' });
 	}
 };
@@ -534,5 +551,6 @@ module.exports = {
 	unlike_idea,
 	upload_attachment,
 	delete_attachment,
+	serve_attachment,
 	request_collaboration,
 };

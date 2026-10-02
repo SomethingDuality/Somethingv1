@@ -6,12 +6,12 @@ const RESET_TTL_MS = 30 * 60 * 1000;
 // The token is single-use because the stored hash is cleared when it's redeemed.
 const hashResetToken = (token) => crypto.createHash('sha256').update(String(token)).digest('hex');
 
-const createResetToken = () => {
+const createResetToken = (ttlMs = RESET_TTL_MS) => {
 	const token = crypto.randomBytes(32).toString('base64url');
 	return {
 		token,
 		hash:      hashResetToken(token),
-		expiresAt: new Date(Date.now() + RESET_TTL_MS),
+		expiresAt: new Date(Date.now() + ttlMs),
 	};
 };
 

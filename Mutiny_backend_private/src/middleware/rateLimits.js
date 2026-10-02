@@ -27,5 +27,7 @@ module.exports = {
 	resetPasswordLimiter:  make('reset',  { windowMs: 60 * 60 * 1000, limit: 10 }),
 	googleAuthLimiter:     make('google', { windowMs: 15 * 60 * 1000, limit: 20 }),
 	changePasswordLimiter: make('change-password', { windowMs: 60 * 60 * 1000, limit: 10, byUser: true }),
+	// New chat requests, however they start (POST /threads or "Collaborate" on an idea): one count.
+	chatRequestLimiter:    make('chat-requests', { windowMs: 24 * 60 * 60 * 1000, limit: 10, byUser: true }),
 	make,
 };

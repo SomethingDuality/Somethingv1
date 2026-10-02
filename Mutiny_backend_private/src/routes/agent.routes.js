@@ -27,7 +27,8 @@ router.get('/ideas/:id/reach', ...founder, agent.ideaReach);
 router.post('/chat', ...founder, burst, agent.chatTurn);
 router.get('/chat', ...founder, agent.chatHistory);
 
-if (process.env.NODE_ENV !== 'production') {
+// Dev tools: off unless explicitly on (DEV_TOOLS=true), and never in production.
+if (process.env.NODE_ENV !== 'production' && process.env.DEV_TOOLS === 'true') {
 	router.post('/diagnostics/echo', protect, burst, agent.echoStart);
 	router.get('/diagnostics/echo/:id/stream', protect, agent.echoStream);
 	router.post('/diagnostics/echo/:id/resume', protect, burst, agent.echoResume);

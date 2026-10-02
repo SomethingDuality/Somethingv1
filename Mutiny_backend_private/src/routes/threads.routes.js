@@ -6,7 +6,7 @@ const { make } = require('../middleware/rateLimits.js');
 const c = require('../controllers/threads.controller.js');
 
 // Community plan C5: chat requests 10/day (plus at most 20 waiting, in the service), messages 30/min.
-const requestLimiter = make('chat-requests', { windowMs: 24 * 60 * 60 * 1000, limit: 10, byUser: true });
+const requestLimiter = require('../middleware/rateLimits.js').chatRequestLimiter;
 const messageLimiter = make('chat-messages', { windowMs: 60 * 1000, limit: 30, byUser: true });
 
 router.use(protect);

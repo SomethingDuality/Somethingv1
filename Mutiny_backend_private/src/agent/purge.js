@@ -25,16 +25,20 @@ const purge = async (by) => {
 	}));
 };
 
-const purgeAgentForIdeas = async (ideaIds) => {
+// `founderOf` (idea id → founder id) lets checkpoint threads be found by their exact prefix
+// (u:<founder>:i:<idea>:), which the thread_id index serves; without it, any user's thread.
+const purgeAgentForIdeas = async (ideaIds, founderOf = new Map()) => {
 	if (!ideaIds?.length) return;
 	const ids = ideaIds.map(String);
 	await stopAgentWork({ ideaIds: ids });
-	const threadRe = new RegExp(`^u:[^:]+:i:(${ids.map(escapeRe).join('|')}):`);
-	await purge((keys) => {
-		if (keys.idea) return { [keys.idea]: { $in: ids } };
-		if (keys.thread) return { [keys.thread]: threadRe };
-		return null;
-	});
+	await purge((keys) => (keys.idea ? { [keys.idea]: { $in: ids } } : null));
+	const db = mongoose.connection.db;
+	const threadCollections = Object.entries(collections).filter(([, keys]) => keys.thread);
+	for (const id of ids) {
+		const founder = founderOf.get(id);
+		const prefix = founder ? `^u:${escapeRe(founder)}:i:${escapeRe(id)}:` : `^u:[^:]+:i:${escapeRe(id)}:`;
+		await Promise.all(threadCollections.map(([name, keys]) => db.collection(name).deleteMany({ [keys.thread]: new RegExp(prefix) })));
+	}
 };
 
 const purgeAgentForUser = async (userId) => {

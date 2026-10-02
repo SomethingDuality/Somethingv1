@@ -5,6 +5,7 @@ import Link from "next/link"
 import { useRouter } from "next/navigation"
 import apiClient from "@/lib/axios"
 import { cn } from "@/lib/utils"
+import { sameSitePath } from "@/lib/next-path"
 import { homeFor, useAuth } from "@/components/auth-provider"
 import { AuthError, AuthShell } from "@/components/auth/auth-shell"
 import { AuthInput, apiErrorMessage } from "@/components/auth/auth-input"
@@ -18,7 +19,7 @@ type TestAccount = { role: Role; name: string; email: string }
  *  Only same-site paths are honoured, so ?next can't become an open redirect. */
 function destination(role?: string) {
   const next = new URLSearchParams(window.location.search).get("next")
-  return next && next.startsWith("/") && !next.startsWith("//") ? next : homeFor(role)
+  return sameSitePath(next, window.location.origin) ?? homeFor(role)
 }
 
 const outlinePill =

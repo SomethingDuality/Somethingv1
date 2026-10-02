@@ -2,6 +2,7 @@
 
 Run (dev):  cd agent && .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
 """
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
@@ -22,12 +23,16 @@ from app.registry import register_features
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     s = get_settings()
+    # LangChain reads tracing from the process environment: a developer shell with LANGSMITH_TRACING
+    # set would send every prompt (founder text) to LangSmith. Only our setting decides.
+    os.environ["LANGSMITH_TRACING"] = os.environ["LANGCHAIN_TRACING_V2"] = "true" if s.langsmith_tracing else "false"
     await db.ensure_indexes()
     saver = checkpointer.saver()
     manager.register("echo", compile_echo(saver))
     register_features(manager, saver)
     worker.start()
     await manager.recover()
+    manager.start_recovery()
     log("agent.started", env=s.agent_env, fake_llm=s.agent_fake_llm, port=s.port)
     try:
         yield

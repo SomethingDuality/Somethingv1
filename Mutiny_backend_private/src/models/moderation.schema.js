@@ -9,6 +9,9 @@ const mongoose = require('mongoose');
 const moderationSchema = new mongoose.Schema({
 	state:        { type: String, enum: ['visible', 'hidden', 'removed', 'approved'], default: 'visible' },
 	reportCount:  { type: Number, default: 0, min: 0 },
+	// Reports that count toward hiding: from accounts with a verified email that are a day old
+	// (a handful of throwaway accounts can't hide a post; their reports still reach the queue).
+	trustedReports: { type: Number, default: 0, min: 0 },
 	// The word filter matched a "review" term: posted, and waiting in the admin queue.
 	needsReview:  { type: Boolean, default: false },
 	flaggedTerms: { type: [String], default: undefined },

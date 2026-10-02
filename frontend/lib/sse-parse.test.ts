@@ -20,3 +20,17 @@ test("a comment-only block is not an event", () => {
 test("an event without a name is a message", () => {
   assert.deepEqual(new SSEParser().push("data: x\n\n"), [{ id: null, event: "message", data: "x" }])
 })
+
+test("a \\r\\n split across two chunks is one line ending", () => {
+  const p = new SSEParser()
+  assert.deepEqual(p.push("id: 7\r"), [])
+  assert.deepEqual(p.push("\nevent: interrupt\r\ndata: {}\r"), [])
+  assert.deepEqual(p.push("\n\r\n"), [{ id: "7", event: "interrupt", data: "{}" }])
+})
+
+test("an empty chunk between \\r and \\n changes nothing", () => {
+  const p = new SSEParser()
+  p.push("data: a\r")
+  assert.deepEqual(p.push(""), [])
+  assert.deepEqual(p.push("\n\n"), [{ id: null, event: "message", data: "a" }])
+})

@@ -52,7 +52,7 @@ async def test_founder_typed_slot_changes_replace_without_confirm():
     notes = await current("idea.pricing")
     assert [n["value"] for n in notes] == ["₹12 per kilo"]
     old = await db.col("agent_notes").find_one({"value": "₹10 per kilo"})
-    assert old["status"] == "invalidated" and old["invalid_at"] == "2026-10-01"
+    assert old["status"] == "invalidated" and old["invalid_at"] == "2026-10-01T00:00:00+00:00"  # stored as ISO
 
 
 async def _wait_for_confirm():

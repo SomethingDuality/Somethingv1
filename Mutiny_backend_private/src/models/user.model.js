@@ -54,7 +54,22 @@ const BaseUserSchema = new mongoose.Schema({
 		default: false
 	},
 
-	refreshToken: { type: String },
+	// One session per device or browser (X-47), each with its own rotating refresh token; only the
+	// sha256 of a token is stored. prevHash lets a second tab that raced the rotation through
+	// for a few seconds instead of signing everyone out. See controllers/user.controller.js.
+	sessions: {
+		type: [new mongoose.Schema({
+			sid: String, hash: String, prevHash: String, rotatedAt: Date, createdAt: Date,
+		}, { _id: false })],
+		default: [],
+		select: false,
+	},
+
+	// Set when the person proved they own the email (a link we emailed, or Google). Admin rights
+	// need it: ADMIN_EMAILS names addresses, and anyone can sign up with an address first.
+	emailVerified:        { type: Boolean, default: false },
+	emailVerifyTokenHash: { type: String, select: false },
+	emailVerifyExpires:   { type: Date,   select: false },
 
 	
 	notifications: [{
@@ -94,7 +109,10 @@ const educationSchema = new mongoose.Schema({
 
 
 const founderSchema = new mongoose.Schema({
-	
+	// Ideas posted today (UTC): the 3-a-day limit, counted in one conditional write so parallel
+	// posts can't slip past it.
+	ideaQuota: { day: String, count: Number },
+
 	expertise: [{ type: String }],
 
 	experience_level: {

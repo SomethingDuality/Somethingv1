@@ -22,6 +22,7 @@
   "main": "index.js",
   "dependencies": {
     "bcrypt": "^6.0.0",
+    "content-disposition": "^1.1.0",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",

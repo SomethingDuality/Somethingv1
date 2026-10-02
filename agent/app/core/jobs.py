@@ -15,6 +15,9 @@ from app.core.log import error, warn
 from app.core.runs import INSTANCE
 
 MAX_ATTEMPTS = 5
+LEASE = timedelta(minutes=5)
+RENEW_EVERY = 30.0   # seconds: a running job keeps its lease and its scope lock alive
+JOB_TIMEOUT = 600.0  # seconds: a hung handler gives its worker slot back
 Handler = Callable[[dict], Awaitable[None]]
 
 HANDLERS: dict[str, Handler] = {}
@@ -84,6 +87,7 @@ class JobWorker:
         self._wake = asyncio.Event()
         self._busy: set[str] = set()
         self._tasks: set[asyncio.Task] = set()
+        self._running: dict[object, tuple[asyncio.Task, dict]] = {}  # job id -> (task, job)
         self._loop_task: asyncio.Task | None = None
         self._stopping = False
 
@@ -138,7 +142,7 @@ class JobWorker:
                 continue
             leased = await db.col("agent_jobs").find_one_and_update(
                 {"_id": job["_id"], "status": job["status"], "attempts": job["attempts"]},
-                {"$set": {"status": "leased", "lease_until": now + timedelta(minutes=5)}, "$inc": {"attempts": 1}},
+                {"$set": {"status": "leased", "lease_until": now + LEASE, "lease_owner": INSTANCE}, "$inc": {"attempts": 1}},
                 return_document=ReturnDocument.AFTER,
             )
             if not leased:
@@ -149,30 +153,62 @@ class JobWorker:
             self._busy.add(job["scope_key"])
             task = asyncio.create_task(self._run(leased))
             self._tasks.add(task)
+            self._running[leased["_id"]] = (task, leased)
             task.add_done_callback(self._tasks.discard)
+            task.add_done_callback(lambda _t, jid=leased["_id"]: self._running.pop(jid, None))
             started += 1
         return started
 
     async def _run(self, job: dict) -> None:
         scope = job["scope_key"]
+        jobs = db.col("agent_jobs")
+        mine = {"_id": job["_id"], "status": "leased", "lease_owner": INSTANCE}  # never resurrect a cancelled job
+        renew = asyncio.create_task(self._renew(job), name=f"renew:{job['_id']}")
         try:
             fn = HANDLERS.get(job["kind"])
             if fn is None:
                 raise LookupError(f"no handler for job kind {job['kind']}")
-            await fn(job)
-            await db.col("agent_jobs").update_one({"_id": job["_id"]}, {"$set": {"status": "done", "finished_at": _now()}})
+            async with asyncio.timeout(JOB_TIMEOUT):
+                await fn(job)
+            await jobs.update_one(mine, {"$set": {"status": "done", "finished_at": _now()}})
+        except asyncio.CancelledError:
+            raise  # erase or shutdown: the job's status was already decided
         except Exception as e:  # noqa: BLE001 - recorded on the job and retried, never dropped
             dead = job["attempts"] >= MAX_ATTEMPTS
             (error if dead else warn)("jobs.failed", job=str(job["_id"]), kind=job["kind"], attempts=job["attempts"], error=type(e).__name__, detail=str(e)[:300])
-            await db.col("agent_jobs").update_one({"_id": job["_id"]}, {"$set": {
+            await jobs.update_one(mine, {"$set": {
                 "status": "dead" if dead else "pending",
                 "not_before": _now() + timedelta(seconds=min(300, 2 ** job["attempts"])),
                 "error": f"{type(e).__name__}: {str(e)[:300]}",
             }})
         finally:
-            await locks.release(scope, INSTANCE)
-            self._busy.discard(scope)
-            self.wake()
+            renew.cancel()
+            self._busy.discard(scope)  # first, so a failing release can't wedge the scope
+            try:
+                await locks.release(scope, INSTANCE)
+            finally:
+                self.wake()
+
+    async def _renew(self, job: dict) -> None:
+        """Keeps a long job's lease and scope lock from expiring under it (another worker would
+        take the job, or the scope, and run it twice)."""
+        while True:
+            await asyncio.sleep(RENEW_EVERY)
+            await db.col("agent_jobs").update_one({"_id": job["_id"], "status": "leased", "lease_owner": INSTANCE},
+                                                  {"$set": {"lease_until": _now() + LEASE}})
+            await locks.acquire(job["scope_key"], INSTANCE)
+
+    async def cancel_matching(self, *, user_id: str | None = None, idea_ids: list[str] | None = None) -> int:
+        """Erase (P16): cancel every queued job for this user or these ideas, then stop and wait
+        for the ones running here, so none of them writes after the data is deleted."""
+        query = {"user_id": user_id} if user_id else {"idea_id": {"$in": idea_ids or []}}
+        await db.col("agent_jobs").update_many({**query, "status": {"$in": ["pending", "leased"]}}, {"$set": {"status": "cancelled"}})
+        hits = [task for task, job in list(self._running.values())
+                if (user_id and job.get("user_id") == user_id) or (idea_ids and job.get("idea_id") in idea_ids)]
+        for task in hits:
+            task.cancel()
+        await asyncio.gather(*hits, return_exceptions=True)
+        return len(hits)
 
     async def drain(self, timeout: float = 30.0) -> None:
         """Tests: run until nothing is runnable now."""
@@ -194,3 +230,22 @@ class JobWorker:
 
 
 worker = JobWorker()
+
+
+KEEP_FINISHED = timedelta(days=30)
+
+
+@periodic(6 * 3600)
+async def prune_finished() -> int:
+    """Finished runs (with their checkpoints) and finished jobs are kept 30 days for inspection,
+    then removed: every memory candidate makes a run, so these would otherwise only grow."""
+    cutoff = _now() - KEEP_FINISHED
+    pruned = 0
+    async for run in db.col("agent_runs").find({"status": {"$in": ["complete", "failed", "cancelled"]}, "finished_at": {"$lt": cutoff}},
+                                               {"thread_id": 1}).limit(500):
+        await db.db()["agent_checkpoints"].delete_many({"thread_id": run["thread_id"]})
+        await db.db()["agent_checkpoint_writes"].delete_many({"thread_id": run["thread_id"]})
+        await db.col("agent_runs").delete_one({"_id": run["_id"]})
+        pruned += 1
+    await db.col("agent_jobs").delete_many({"status": {"$in": ["done", "cancelled"]}, "created_at": {"$lt": cutoff}})
+    return pruned

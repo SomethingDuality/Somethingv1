@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react"
 import Link from "next/link"
 import { IdeaReach } from "@/components/matching/matched-ideas"
 import { useParams, useRouter } from "next/navigation"
-import apiClient, { assetUrl } from "@/lib/axios"
+import apiClient, { assetUrl, isUploadPath, openUpload } from "@/lib/axios"
 import { apiError } from "@/lib/utils"
 import { Aside, Main, Page, PageTitle, Section, Split, pillClass, quietLinkClass, relativeTime, usd } from "@/components/shell/page"
 import { FounderCard, type FounderCardData } from "@/components/founder-card"
@@ -16,6 +16,7 @@ import { IdeaUpdates } from "@/components/idea-updates"
 import { IdeaMilestones, toMilestone, type Milestone } from "@/components/idea-milestones"
 import { useAuth } from "@/components/auth-provider"
 import { labelFor } from "@/lib/taxonomy"
+import { dateLabel } from "@/lib/format"
 import { toast } from "@/components/ui/use-toast"
 import { SkeletonRows } from "@/components/visual/skeleton"
 import { HiddenNotice, ReportButton } from "@/components/community/report-dialog"
@@ -72,8 +73,11 @@ interface Comment {
   hidden?: "hidden" | "removed"
   authorAvatar?: string   // the API doesn't send avatars yet
   text: string
+  /** ISO. Older APIs sent a locale date ("10/2/2026"), which has no time to say "5 min ago" with. */
   timestamp: string
 }
+
+const commentDate = (t: string) => (t.includes("T") ? relativeTime(t) : dateLabel(t)) || t
 
 export default function IdeaDetailsPage() {
   const router = useRouter()
@@ -274,8 +278,8 @@ export default function IdeaDetailsPage() {
                       <span className="block truncate text-[15px]">{f.name}</span>
                       <span className="block text-xs text-muted-foreground">{[fileKind(f.type), f.size].filter(Boolean).join(", ")}</span>
                     </span>
-                    {f.url ? (
-                      <a href={assetUrl(f.url)} target="_blank" rel="noopener noreferrer" className={quietLinkClass}>Open</a>
+                    {isUploadPath(f.url) ? (
+                      <a href={assetUrl(f.url)} target="_blank" rel="noopener noreferrer" onClick={(e) => { e.preventDefault(); openUpload(f.url!) }} className={quietLinkClass}>Open</a>
                     ) : (
                       <span className="text-xs text-muted-foreground">Not uploaded</span>
                     )}
@@ -317,7 +321,7 @@ export default function IdeaDetailsPage() {
                     <div className="flex items-baseline justify-between gap-6">
                       <span className="text-[15px] text-foreground">{c.author || "Someone"}</span>
                       <span className="flex items-baseline gap-4 text-xs text-muted-foreground">
-                        {relativeTime(c.timestamp)}
+                        {commentDate(c.timestamp)}
                         {user?.id && c.authorId && String(c.authorId) !== String(user.id) && (
                           <ReportButton type="comment" id={c.id} className="text-xs" />
                         )}

@@ -3,6 +3,7 @@
 The collection list is mirrored in shared/agent-collections.json, which Node uses to purge on
 deletion (P16); tests fail if the two drift."""
 from pymongo import ASCENDING, DESCENDING, AsyncMongoClient, IndexModel
+from pymongo.errors import OperationFailure
 
 from app.core.settings import get_settings
 
@@ -40,6 +41,7 @@ INDEXES: dict[str, list[IndexModel]] = {
     ],
     "agent_runs": [
         IndexModel([("thread_id", ASCENDING)], unique=True),
+        IndexModel([("candidate_id", ASCENDING), ("kind", ASCENDING)], sparse=True),  # memory: one run per candidate
         IndexModel([("status", ASCENDING), ("heartbeat_at", ASCENDING)]),
         IndexModel([("user_id", ASCENDING), ("started_at", DESCENDING)]),
         IndexModel([("idea_id", ASCENDING)], sparse=True),
@@ -110,8 +112,22 @@ def col(name: str):
 
 
 async def ensure_indexes() -> None:
+    """Creates the indexes. One whose options changed (a TTL, say) is rebuilt instead of failing
+    the boot with IndexOptionsConflict."""
     for name, models in INDEXES.items():
-        await db()[name].create_indexes(models)
+        try:
+            await db()[name].create_indexes(models)
+        except OperationFailure as e:
+            if e.code not in (85, 86):  # IndexOptionsConflict, IndexKeySpecsConflict
+                raise
+            for model in models:
+                try:
+                    await db()[name].create_indexes([model])
+                except OperationFailure as e2:
+                    if e2.code not in (85, 86):
+                        raise
+                    await db()[name].drop_index(model.document["name"])
+                    await db()[name].create_indexes([model])
 
 
 async def close() -> None:

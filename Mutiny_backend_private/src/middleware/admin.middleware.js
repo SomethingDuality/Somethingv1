@@ -7,11 +7,15 @@ const adminEmails = () =>
 
 const isAdminEmail = (email) => Boolean(email) && adminEmails().includes(String(email).toLowerCase());
 
+// An address on the list is not enough: the account must have proved it owns it (anyone could
+// sign up with an admin's address before the admin does).
+const isAdmin = (user) => Boolean(user?.emailVerified) && isAdminEmail(user?.email);
+
 // Runs after `protect`.
 const requireAdmin = async (req, res, next) => {
 	try {
-		const user = await BaseUser.findById(req.user._id).select('email').lean();
-		if (!user || !isAdminEmail(user.email)) return res.status(404).json({ success: false, message: 'Not found' });
+		const user = await BaseUser.findById(req.user._id).select('email emailVerified').lean();
+		if (!isAdmin(user)) return res.status(404).json({ success: false, message: 'Not found' });
 		next();
 	} catch (err) {
 		console.error('requireAdmin:', err);
@@ -19,4 +23,4 @@ const requireAdmin = async (req, res, next) => {
 	}
 };
 
-module.exports = { isAdminEmail, requireAdmin, adminEmails };
+module.exports = { isAdminEmail, isAdmin, requireAdmin, adminEmails };

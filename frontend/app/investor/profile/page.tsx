@@ -34,6 +34,8 @@ type InvestorNote = {
 
 type InvestorProfile = {
   name: string
+  /** The saved photo (an /uploads path or an absolute URL), '' when there is none. */
+  avatarUrl?: string
   firm: string
   minCheck: number
   maxCheck: number
@@ -92,10 +94,13 @@ type Verification = {
 
 
 export default function InvestorProfilePage() {
-  const { avatarUrl, setAvatarUrl, userName, setUserName } = useAvatar()
+  // The photo and name shown come from the server's profile; the shared context only mirrors them.
+  const { setAvatarUrl, setUserName } = useAvatar()
   
   // Profile state
   const [profile, setProfile] = useState<InvestorProfile | null>(null)
+  // Its own state: a new photo must not re-sync (and reset) the fields being edited below.
+  const [avatar, setAvatar] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -163,6 +168,8 @@ export default function InvestorProfilePage() {
     if (profile) {
       setName(profile.name)
       setUserName(profile.name)
+      setAvatar(profile.avatarUrl || null)
+      setAvatarUrl(profile.avatarUrl || null)
       setFirm(profile.firm)
       setMinCheck(profile.minCheck)
       setMaxCheck(profile.maxCheck)
@@ -219,7 +226,7 @@ export default function InvestorProfilePage() {
       setCoInvestors(profile.coInvestors || [])
       setPool(profile.knownFields?.includes("totalCapitalPool") && profile.totalCapitalPool ? String(profile.totalCapitalPool) : "")
     }
-  }, [profile, setUserName])
+  }, [profile, setUserName, setAvatarUrl])
 
   const fetchProfile = async () => {
     try {
@@ -321,6 +328,7 @@ export default function InvestorProfilePage() {
       const response = await apiClient.post<{ url: string }>("/investor/avatar", formData, {
         headers: { "Content-Type": "multipart/form-data" },
       })
+      setAvatar(response.data.url)
       setAvatarUrl(response.data.url)
     } catch (err) {
       // No fake local preview: a blob: URL would vanish on reload and look like a saved photo.
@@ -451,11 +459,10 @@ export default function InvestorProfilePage() {
         <Main>
           <div className="flex items-start gap-6">
             <AvatarUploader
-              name={userName}
-              src={assetUrl(avatarUrl) ?? null}
-              onChange={(file, url) => {
+              name={profile?.name ?? ""}
+              src={assetUrl(avatar) ?? null}
+              onChange={(file) => {
                 if (file) uploadAvatar(file)
-                else setAvatarUrl(url)
               }}
               size={64}
             />
@@ -463,7 +470,7 @@ export default function InvestorProfilePage() {
               <PageTitle
                 title={
                   <>
-                    {userName || "Your profile"}
+                    {profile?.name || "Your profile"}
                     {profile?.verification?.status === "verified" && (
                       <span className="mt-1 block text-[15px] text-muted-foreground sm:ml-3 sm:mt-0 sm:inline sm:align-middle">Verified investor</span>
                     )}

@@ -10,6 +10,7 @@ from langchain_core.runnables import RunnableConfig
 from app.core import jobs
 from app.memory.ingest import idea_scope
 from app.review import store
+from app.review.graph.route import _open_risks
 from app.review.graph.state import ReviewState
 from app.review.relay_templates import STATUS_TEXT
 from app.utils.progress import publish
@@ -31,7 +32,9 @@ async def apply_ruling_node(state: ReviewState, config: RunnableConfig) -> dict:
         rs[risk_id] = {"status": outcome, "ruling": (reb.get("ruling") or {}).get("rationale")}
         rnd += 1
         rebuttals.append({**reb, "round": rnd, "at": datetime.now(timezone.utc).isoformat()})
-        if state["subject"] == "saved_idea" and reb.get("text"):
+        # Only evidence and corrections are facts; "you're wrong, change it" is not (it would land
+        # in memory as founder-stated and could invalidate real facts).
+        if state["subject"] == "saved_idea" and reb.get("text") and reb.get("kind") in ("new_verifiable_evidence", "factual_correction"):
             scope = idea_scope(state["user_id"], state["idea_id"])
             cid = hashlib.sha256(f"{state['review_id']}|rebuttal|{rnd}".encode()).hexdigest()[:32]
             await jobs.enqueue("candidates", scope["scope_key"], user_id=state["user_id"], idea_id=state["idea_id"], payload={
@@ -44,5 +47,6 @@ async def apply_ruling_node(state: ReviewState, config: RunnableConfig) -> dict:
     await publish(config, "ruling", {"riskId": risk_id, "status": rs[risk_id]["status"], "statusText": STATUS_TEXT.get(rs[risk_id]["status"], ""),
                                      "ruling": rs[risk_id]["ruling"], "round": rnd})
     new = {"risk_state": rs, "round": rnd, "rebuttal": {}}
-    await store.save({**state, **new, "rebuttals": [*(state.get("rebuttals") or []), *rebuttals]}, status="awaiting_reaction")
+    after = {**state, **new, "rebuttals": [*(state.get("rebuttals") or []), *rebuttals]}
+    await store.save(after, status="awaiting_reaction" if _open_risks(after) else "running")
     return {**new, "rebuttals": rebuttals}

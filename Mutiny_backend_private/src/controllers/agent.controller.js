@@ -1,4 +1,6 @@
 // Browser-facing agent routes (/agent/*). The user is already authenticated by `protect`; this
+const { Idea } = require('../models/ideas.model.js');
+const { PUBLIC_IDEA } = require('../community/targets.js');
 // forwards to the Python agent with the service key and passes its answers (and streams) back.
 const { agentJSON, sendAgentError } = require('../agent/client.js');
 const { proxySSE } = require('../agent/sse.js');
@@ -6,7 +8,8 @@ const { proxySSE } = require('../agent/sse.js');
 const userOf = (req) => ({ ...req.user, tz: req.get('x-user-tz') || req.query.tz });
 const pass = (res, { status, body }) => res.status(status).json(body);
 const after = (req) => Math.max(0, Number.parseInt(req.query.after, 10) || 0);
-const isHex = (s) => /^[a-f0-9]{8,64}$/i.test(String(s || ''));
+// Strings only: an array like ['…'] would pass a String() check and reach the agent as a list.
+const isHex = (s) => typeof s === 'string' && /^[a-f0-9]{8,64}$/i.test(s);
 
 // GET /agent/status: is the agent reachable, and is it on fake models.
 async function status(req, res) {
@@ -37,7 +40,7 @@ async function echoResume(req, res) {
 
 // ---- Reviews (Something + Nothing on the Something page). Founders only (R9: investors never
 // see a review). The agent enforces the daily quota and ownership; Node checks the login.
-const isIdea = (s) => /^[a-f0-9]{24}$/i.test(String(s || ''));
+const isIdea = (s) => typeof s === 'string' && /^[a-f0-9]{24}$/i.test(s);
 const READERS = new Set(['something', 'nothing']);
 
 async function reviewStatus(req, res) {
@@ -102,7 +105,17 @@ async function reviewDelete(req, res) {
 const MATCH_ACTIONS = new Set(['opened', 'saved', 'passed', 'asked']);
 
 async function dealFlow(req, res) {
-	try { return pass(res, await agentJSON('/internal/deal-flow', { user: userOf(req), timeoutMs: 15000 })); } catch (err) { return sendAgentError(res, err); }
+	try {
+		const out = await agentJSON('/internal/deal-flow', { user: userOf(req), timeoutMs: 15000 });
+		// The agent serves the ideas as they were when the batch was made: one that has since
+		// gone back to a draft, been hidden or deleted is dropped here, where the truth is.
+		if (out.status === 200 && Array.isArray(out.body?.matches) && out.body.matches.length) {
+			const ids = out.body.matches.map((m) => m.ideaId).filter(isIdea);
+			const live = new Set((await Idea.find({ _id: { $in: ids }, ...PUBLIC_IDEA }).select('_id').lean()).map((i) => String(i._id)));
+			out.body.matches = out.body.matches.filter((m) => live.has(String(m.ideaId)));
+		}
+		return pass(res, out);
+	} catch (err) { return sendAgentError(res, err); }
 }
 
 async function dealFlowAct(req, res) {
@@ -124,6 +137,8 @@ async function chatTurn(req, res) {
 	if (text.length > 2000) return res.status(400).json({ success: false, message: 'Keep it under 2000 characters' });
 	if (reviewId !== undefined && reviewId !== null && !/^[a-f0-9]{32}$/.test(String(reviewId))) return res.status(400).json({ success: false, message: 'Invalid review' });
 	if (ideaId !== undefined && ideaId !== null && !isIdea(ideaId)) return res.status(400).json({ success: false, message: 'Invalid idea' });
+	// The agent checks this too; an idea that isn't theirs never leaves Node.
+	if (ideaId && !(await Idea.exists({ _id: ideaId, founder_id: req.user._id }))) return res.status(404).json({ success: false, message: 'Idea not found' });
 	try {
 		return pass(res, await agentJSON('/internal/chat', {
 			method: 'POST', user: userOf(req), timeoutMs: 30000,

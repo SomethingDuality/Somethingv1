@@ -15,19 +15,67 @@ export function assetUrl(path?: string | null): string | undefined {
   return path.startsWith('/uploads/') ? `${API_BASE_URL}${path}` : path;
 }
 
+/** An idea file the server stored (`/uploads/ideas/<idea>/<random>.<ext>`); older records could hold any URL. */
+export const isUploadPath = (path?: string | null): path is string =>
+  typeof path === 'string' && /^\/uploads\/ideas\/[a-f0-9]{24}\/[a-f0-9]{32}\.[a-z0-9]{2,4}$/.test(path);
 
-let isRefreshing = false;
-// Queue of { resolve, reject } callbacks for requests that arrived while a
-// refresh was already in-flight — they all get resumed once refresh completes.
-let refreshQueue: Array<{ resolve: () => void; reject: (e: unknown) => void }> = [];
+/**
+ * Opens an idea's file in a new tab. Files are served only to signed-in people who may see the
+ * idea, and a plain link would get a 401 once the 15-minute sign-in cookie lapses, so this
+ * refreshes it first (the tab opens synchronously so popup blockers allow it).
+ */
+export async function openUpload(path: string): Promise<void> {
+  // Only our own stored files: navigating by `location` would skip React's link sanitising.
+  if (!isUploadPath(path)) return;
+  const url = `${API_BASE_URL}${path}`;
+  const tab = window.open('', '_blank');
+  try {
+    await apiClient.get('/auth/me');
+  } catch {
+    tab?.close();
+    return;
+  }
+  if (tab) {
+    tab.opener = null;
+    tab.location.href = url;
+  } else {
+    window.location.assign(url);
+  }
+}
 
-const processQueue = (error: unknown) => {
-  refreshQueue.forEach(({ resolve, reject }) => {
-    if (error) reject(error);
-    else resolve();
-  });
-  refreshQueue = [];
+
+/** The server said "not signed in" or "not allowed", as opposed to being offline or failing. */
+export const isAuthFailure = (err: unknown) => {
+  const status = (err as { response?: { status?: number } })?.response?.status;
+  return status === 401 || status === 403;
 };
+
+let refreshing: Promise<void> | null = null;
+
+/**
+ * Renews the sign-in cookies. The server rotates the refresh token on every call, so two refreshes
+ * at once would sign the user out: every caller in this tab shares one request, and tabs take
+ * turns through a Web Lock where the browser has them (the one that waits sends the new cookie).
+ * Only a 401/403 means the session is over; that is announced once, here.
+ */
+export function refreshSession(): Promise<void> {
+  if (!refreshing) {
+    const run = async () => { await apiClient.post('/auth/refresh'); };
+    const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined;
+    const done: Promise<unknown> = locks ? locks.request('something-auth-refresh', run) : run();
+    refreshing = done
+      .then(() => undefined)
+      .catch((err) => {
+        // Refused: the session is over. Tell AuthProvider and let RequireAuth decide where to
+        // go. Never redirect here — public pages (landing, terms) must stay put for logged-out
+        // visitors. Offline or a 5xx just fails this call; the next one tries again.
+        if (isAuthFailure(err) && typeof window !== 'undefined') window.dispatchEvent(new Event('auth:expired'));
+        throw err;
+      })
+      .finally(() => { refreshing = null; });
+  }
+  return refreshing;
+}
 
 apiClient.interceptors.response.use(
   (res: AxiosResponse) => res,
@@ -45,34 +93,10 @@ apiClient.interceptors.response.use(
       // Don't attempt refresh while on auth pages — avoids reload loops
       (typeof window === 'undefined' || (!window.location.pathname.startsWith('/login') && !window.location.pathname.startsWith('/signup')))
     ) {
-      if (isRefreshing) {
-        return new Promise<AxiosResponse>((resolve, reject) => {
-          refreshQueue.push({
-            resolve: () => resolve(apiClient(originalRequest)),
-            reject,
-          });
-        });
-      }
-
       originalRequest._retry = true;
-      isRefreshing = true;
-
-      try {
-        await apiClient.post('/auth/refresh');
-        processQueue(null);
-        return apiClient(originalRequest);
-      } catch (refreshError) {
-        processQueue(refreshError);
-        // Refresh failed: the session is over. Tell AuthProvider and let RequireAuth decide
-        // where to go. Never redirect here — public pages (landing, terms) must stay put
-        // for logged-out visitors.
-        if (typeof window !== 'undefined') {
-          window.dispatchEvent(new Event('auth:expired'));
-        }
-        return Promise.reject(refreshError);
-      } finally {
-        isRefreshing = false;
-      }
+      // Requests that 401 together wait for the same refresh, then go again.
+      await refreshSession();
+      return apiClient(originalRequest);
     }
 
     return Promise.reject(err);

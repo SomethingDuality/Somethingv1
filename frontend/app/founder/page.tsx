@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import apiClient from "@/lib/axios"
@@ -60,9 +60,15 @@ export default function FounderHome() {
   const [ideas, setIdeas] = useState<Idea[] | null>(null)
   const [notes, setNotes] = useState<Notification[] | null>(null)
   const [overview, setOverview] = useState<Overview | null>(null)
+  const [overviewFailed, setOverviewFailed] = useState(false)
   const [profile, setProfile] = useState<Profile | null>(null)
   const [triedSomething, setTriedSomething] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  const loadOverview = useCallback(() => {
+    setOverviewFailed(false)
+    apiClient.get<Overview>("/founder/overview").then((r) => setOverview(r.data)).catch(() => setOverviewFailed(true))
+  }, [])
 
   useEffect(() => {
     apiClient.get<Idea[]>("/ideas/user").then((r) => setIdeas(r.data)).catch((err) => {
@@ -70,7 +76,7 @@ export default function FounderHome() {
       setError(apiError(err, "Couldn't load your ideas."))
     })
     apiClient.get<Notification[]>("/notifications").then((r) => setNotes(r.data)).catch(() => setNotes([]))
-    apiClient.get<Overview>("/founder/overview").then((r) => setOverview(r.data)).catch(() => setOverview(null))
+    loadOverview()
     // Answers from the Something box land on the profile and ideas; refresh what depends on them.
     const refresh = () => {
       apiClient.get<Profile>("/founder/profile").then((r) => setProfile(r.data)).catch(() => setProfile(null))
@@ -80,10 +86,17 @@ export default function FounderHome() {
     window.addEventListener("profile:updated", refresh)
     try { setTriedSomething(localStorage.getItem(TRIED_SOMETHING_KEY) === "1") } catch { /* private mode */ }
     return () => window.removeEventListener("profile:updated", refresh)
-  }, [])
+  }, [loadOverview])
 
   const needsYou = notes?.filter((n) => !n.read) ?? null
   const teammates = overview?.team.filter((m) => !m.isYou) ?? []
+  // Without this the team and activity would show skeletons forever.
+  const overviewMissing = (what: string) => overviewFailed && !overview ? (
+    <div role="alert" className="flex items-baseline gap-5">
+      <p className="text-[15px] text-muted-foreground">Couldn&apos;t load {what}.</p>
+      <button type="button" onClick={loadOverview} className={quietLinkClass}>Retry</button>
+    </div>
+  ) : null
 
   // One plain sentence instead of number tiles.
   const summary = overview && ideas
@@ -166,7 +179,7 @@ export default function FounderHome() {
           </Section>
 
           <Section title="Team">
-            {overview === null ? (
+            {overviewMissing("your team") ?? (overview === null ? (
               <SkeletonRows />
             ) : teammates.length === 0 ? (
               <p className="text-[15px] leading-relaxed text-muted-foreground">
@@ -181,7 +194,7 @@ export default function FounderHome() {
                   </li>
                 ))}
               </ul>
-            )}
+            ))}
           </Section>
 
           <LeaderboardCard kind="ideas" role="founder" title="Top ideas" />
@@ -229,7 +242,7 @@ export default function FounderHome() {
           <MatchedIdeas role="founder" />
 
           <Section title="Recent activity">
-            {overview === null ? (
+            {overviewMissing("recent activity") ?? (overview === null ? (
               <SkeletonRows />
             ) : overview.activity.length === 0 ? (
               <p className="text-[15px] text-muted-foreground">Nothing yet. Supporters, comments and commitments on your ideas show up here.</p>
@@ -245,7 +258,7 @@ export default function FounderHome() {
                   </li>
                 ))}
               </ul>
-            )}
+            ))}
           </Section>
         </Main>
       </Split>

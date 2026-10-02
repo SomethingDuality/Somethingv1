@@ -1,6 +1,7 @@
 "use client"
 
-import React, { createContext, useContext, useState, useEffect } from 'react'
+import React, { createContext, useCallback, useContext, useState, useEffect, useRef } from 'react'
+import { useAuth } from '@/components/auth-provider'
 
 type AvatarContextType = {
   avatarUrl: string | null
@@ -11,31 +12,60 @@ type AvatarContextType = {
 
 const AvatarContext = createContext<AvatarContextType | undefined>(undefined)
 
+const AVATAR_KEY = 'investor-avatar'
+const NAME_KEY = 'investor-name'
+
+// Blocked storage (private mode, site data off) throws: it must not take the app down.
+const read = (key: string) => {
+  try { return sessionStorage.getItem(key) } catch { return null }
+}
+const write = (key: string, value: string | null) => {
+  try {
+    if (value) sessionStorage.setItem(key, value)
+    else sessionStorage.removeItem(key)
+  } catch {
+    // Nothing kept for this tab; the profile page reads the server anyway.
+  }
+}
+
 export function AvatarProvider({ children }: { children: React.ReactNode }) {
+  const { user, loading } = useAuth()
   const [avatarUrl, setAvatarUrlState] = useState<string | null>(null)
   const [userName, setUserNameState] = useState<string>('')
 
   // Load from memory on mount
   useEffect(() => {
-    const stored = sessionStorage.getItem('investor-avatar')
-    const storedName = sessionStorage.getItem('investor-name')
+    const stored = read(AVATAR_KEY)
+    const storedName = read(NAME_KEY)
     if (stored) setAvatarUrlState(stored)
     if (storedName) setUserNameState(storedName)
   }, [])
 
-  const setAvatarUrl = (url: string | null) => {
-    setAvatarUrlState(url)
-    if (url) {
-      sessionStorage.setItem('investor-avatar', url)
-    } else {
-      sessionStorage.removeItem('investor-avatar')
+  // The photo and name belong to whoever is signed in: signing out (or in as someone else in
+  // this tab) clears them, so the next person never sees the last one's.
+  const userId = user?.id ?? null
+  const owner = useRef<string | null | undefined>(undefined)
+  useEffect(() => {
+    if (loading) return
+    if (!userId || (owner.current !== undefined && owner.current !== userId)) {
+      setAvatarUrlState(null)
+      setUserNameState('')
+      write(AVATAR_KEY, null)
+      write(NAME_KEY, null)
     }
-  }
+    owner.current = userId
+  }, [loading, userId])
 
-  const setUserName = (name: string) => {
+  // Stable, so pages can list them as effect dependencies without re-running on every render.
+  const setAvatarUrl = useCallback((url: string | null) => {
+    setAvatarUrlState(url)
+    write(AVATAR_KEY, url)
+  }, [])
+
+  const setUserName = useCallback((name: string) => {
     setUserNameState(name)
-    sessionStorage.setItem('investor-name', name)
-  }
+    write(NAME_KEY, name)
+  }, [])
 
   return (
     <AvatarContext.Provider value={{ avatarUrl, setAvatarUrl, userName, setUserName }}>

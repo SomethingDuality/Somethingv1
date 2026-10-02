@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react"
 import Link from "next/link"
 import { useParams } from "next/navigation"
-import apiClient, { assetUrl } from "@/lib/axios"
+import apiClient, { assetUrl, isUploadPath, openUpload } from "@/lib/axios"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { apiError, cn } from "@/lib/utils"
 import { Aside, Main, Page, PageTitle, Section, Split, pillClass, quietLinkClass, usd } from "@/components/shell/page"
@@ -342,8 +342,8 @@ export default function ProjectBriefPage() {
                       <span className="block truncate text-[15px]">{f.name}</span>
                       <span className="block text-xs text-muted-foreground">{[fileKind(f.type), f.size].filter(Boolean).join(", ")}</span>
                     </span>
-                    {f.url ? (
-                      <a href={assetUrl(f.url)} target="_blank" rel="noopener noreferrer" className={quietLinkClass}>Open</a>
+                    {isUploadPath(f.url) ? (
+                      <a href={assetUrl(f.url)} target="_blank" rel="noopener noreferrer" onClick={(e) => { e.preventDefault(); openUpload(f.url!) }} className={quietLinkClass}>Open</a>
                     ) : (
                       <span className="text-xs text-muted-foreground">Not uploaded</span>
                     )}

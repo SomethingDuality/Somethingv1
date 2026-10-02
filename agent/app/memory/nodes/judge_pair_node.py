@@ -30,7 +30,7 @@ async def judge(note: dict, cand: dict, order: str, ctx: dict) -> dict:
     )
     j = await llm.structured(prompt, Judgement, tier="haiku", max_tokens=600, ctx=ctx)
     relation = j.relation
-    if not verify(j.evidence_quote, cand["text"], min_len=2):
+    if not verify(j.evidence_quote, new, min_len=2):  # the exact NEW text the model was shown
         relation = "unsure"
     return {"note_id": note.get("note_id"), "order": order, "relation": relation, "modality": j.modality,
             "valid_at": j.valid_at, "evidence_quote": j.evidence_quote, "rationale": j.rationale[:300]}

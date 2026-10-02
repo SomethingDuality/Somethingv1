@@ -10,4 +10,13 @@ const sendPasswordReset = async (email, link) => {
 	console.error(`[Mail] MAIL_TRANSPORT=${transport} is not implemented; reset email to ${email} was not sent`);
 };
 
-module.exports = { sendPasswordReset };
+const sendEmailVerification = async (email, link) => {
+	const transport = process.env.MAIL_TRANSPORT || 'console';
+	if (transport === 'console') {
+		console.log(`[Mail] Verify the email for ${email}: ${link}`);
+		return;
+	}
+	console.error(`[Mail] MAIL_TRANSPORT=${transport} is not implemented; verification email to ${email} was not sent`);
+};
+
+module.exports = { sendPasswordReset, sendEmailVerification };

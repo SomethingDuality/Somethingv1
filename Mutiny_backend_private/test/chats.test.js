@@ -1,7 +1,7 @@
 // Community C5: chats, request rules and Ghost Mode enforced on the server.
 const { test, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
-const { start, stop, resetDb, agent, settle } = require('./helpers/server.js');
+const { start, stop, resetDb, agent, verifyEmail, settle } = require('./helpers/server.js');
 
 let Thread, Message, Idea, BaseUser;
 
@@ -217,6 +217,7 @@ test('a message can be reported only by the other person, and lands in the admin
 
 	const saved = process.env.ADMIN_EMAILS;
 	process.env.ADMIN_EMAILS = cole.email;
+	await verifyEmail(cole.email);
 	try {
 		const queue = (await cole.get('/admin/moderation?view=reported')).body;
 		assert.equal(queue[0].type, 'message');

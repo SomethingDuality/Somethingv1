@@ -1,4 +1,5 @@
 const { Founder } = require('../models/user.model.js');
+const uploads = require('../utils/uploads.js');
 const { Idea }    = require('../models/ideas.model.js');
 const { Team }    = require('../models/team.model.js');
 const { Portfolio } = require('../models/portfolio.model.js');
@@ -134,25 +135,24 @@ const update_profile = async (req, res) => {
 
 
 const update_avatar = async (req, res) => {
-	if (!assertFounder(req, res)) return;
+	if (!assertFounder(req, res)) {
+		if (req.file) await uploads.removeStored(uploads.AVATARS_DIR, req.file.filename);
+		return;
+	}
 
 	if (!req.file) {
 		return res.status(400).json({ success: false, message: 'No file uploaded' });
 	}
 
-	
-	
 	const avatarUrl = `/uploads/avatars/${req.file.filename}`;
 
 	try {
-		await Founder.findByIdAndUpdate(
-			req.user._id,
-			{ avatar: avatarUrl },
-			{ new: true }
-		);
+		const before = await Founder.findByIdAndUpdate(req.user._id, { avatar: avatarUrl }).select('avatar').lean();
+		await uploads.removeAvatar(before?.avatar); // the old picture doesn't stay on disk
 
 		return res.status(200).json({ success: true, avatarUrl });
 	} catch (err) {
+		await uploads.removeStored(uploads.AVATARS_DIR, req.file.filename);
 		console.error('update_avatar:', err);
 		return res.status(500).json({ success: false, message: 'Internal server error' });
 	}

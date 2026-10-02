@@ -31,6 +31,14 @@ class ProviderUnavailable(AgentError):
     message = "The review couldn't finish just now. Please try again in a minute."
 
 
+class ProvidersExhausted(AgentError):
+    """Providers failed after their own retries already ran (e.g. too few Nothing samples came
+    back). Same message as ProviderUnavailable, but not a subclass: retrying the node that found
+    this would only repeat it."""
+    code, status, retryable = "provider_unavailable", 503, True
+    message = "The review couldn't finish just now. Please try again in a minute."
+
+
 class AllProvidersFailed(ProviderUnavailable):
     def __init__(self, causes: list[str]):
         super().__init__("; ".join(causes))
@@ -42,7 +50,15 @@ class JudgeRefused(AgentError):
     message = "This one couldn't be reviewed. Try describing the idea differently."
 
 
-class Truncated(ProviderUnavailable):
+class Unusable(AgentError):
+    """The model answered, but not usably: cut off at max_tokens, or output that doesn't parse.
+    The same prompt would most likely fail the same way, so our retry policies (which retry
+    ProviderUnavailable) leave it alone. It is still our failure: the founder gets the use back."""
+    code, status, retryable = "unusable_output", 503, True
+    message = "The review couldn't finish just now. Please try again in a minute."
+
+
+class Truncated(Unusable):
     pass
 
 

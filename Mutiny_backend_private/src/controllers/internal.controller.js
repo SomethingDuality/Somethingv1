@@ -48,7 +48,7 @@ async function context(req, res) {
 	const { ideaId } = req.query;
 	const purpose = req.query.purpose === 'memory' ? 'memory' : 'review';
 	if (!isId(userId) || (ideaId && !isId(ideaId))) return res.status(404).json({ success: false });
-	const user = await BaseUser.findById(userId).select('-password -refreshToken -notifications -email').lean();
+	const user = await BaseUser.findById(userId).select('-password -notifications -email').lean();
 	if (!user) return res.status(404).json({ success: false });
 	const out = {
 		user: {
@@ -76,12 +76,21 @@ async function context(req, res) {
 	return res.json(out);
 }
 
+// The fields the agent may write: the Node fields its memory slots mirror (node_field in
+// agent/app/memory/slots.py). Never visibility, Ghost Mode or anything else a user sets.
+const AGENT_WRITABLE = {
+	user: new Set(['location', 'skills', 'interests']),
+	idea: new Set(['title', 'stage', 'raising', 'tags', 'lookingFor']),
+};
+
 // POST /internal/apply-update { userId, entity: user|idea, entityId?, patch, ref? }
 async function applyUpdateRoute(req, res) {
 	const { userId, entity = 'user', entityId, patch } = req.body || {};
 	if (!isId(userId) || !['user', 'idea'].includes(entity) || (entity === 'idea' && !isId(entityId))) {
 		return res.status(400).json({ success: false, message: 'bad target' });
 	}
+	const blocked = patch && typeof patch === 'object' ? Object.keys(patch).find((k) => !AGENT_WRITABLE[entity].has(k)) : null;
+	if (blocked) return res.status(422).json({ ok: false, field: blocked, message: 'is not a field the agent may write' });
 	const user = await BaseUser.findById(userId).select('role').lean();
 	if (!user) return res.status(404).json({ success: false });
 	try {

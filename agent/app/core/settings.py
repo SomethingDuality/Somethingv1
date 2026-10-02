@@ -72,8 +72,10 @@ class Settings(BaseSettings):
         if self.agent_env == "production":
             if self.agent_fake_llm:
                 raise ValueError("AGENT_FAKE_LLM is not allowed in production")
-            if {self.node_to_agent_key, self.agent_to_node_key} & DEV_KEYS:
+            if {self.node_to_agent_key, self.node_to_agent_key_previous, self.agent_to_node_key} & DEV_KEYS:
                 raise ValueError("dev placeholder service keys are not allowed in production")
+            if self.node_to_agent_key == self.agent_to_node_key:
+                raise ValueError("NODE_TO_AGENT_KEY and AGENT_TO_NODE_KEY must differ (one key per direction)")
         return self
 
     @property

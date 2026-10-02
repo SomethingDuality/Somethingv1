@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 import numpy as np
 
 from app.memory import store
+from app.memory.decide import parse_when
 from app.memory.schemas import TIER
 from app.models import embeddings
 
@@ -82,9 +83,12 @@ async def recall(keys: list[str], query: str, *, k: int = 8, exclude_sources: tu
 async def known(keys: list[str], slot_key: str) -> dict | None:
     """The current value of a slot. An idea's value overrides the founder's; within one scope a
     contested slot resolves by provenance tier, then the latest valid_at."""
+    oldest = datetime.min.replace(tzinfo=timezone.utc)
     for key in keys:  # most specific scope first
-        notes = [n for n in await store.current_notes([key], embeddings=False) if n.get("slot_key") == slot_key]
+        # Options ("thinking about MVP") are never the value; only decided notes are.
+        notes = [n for n in await store.current_notes([key], embeddings=False)
+                 if n.get("slot_key") == slot_key and n.get("kind") != "option" and n.get("modality", "decided") == "decided"]
         if notes:
-            notes.sort(key=lambda n: (TIER.get(n["provenance"], 0), str(n.get("valid_at") or "")), reverse=True)
+            notes.sort(key=lambda n: (TIER.get(n["provenance"], 0), parse_when(n.get("valid_at")) or oldest), reverse=True)
             return store.public(notes[0])
     return None

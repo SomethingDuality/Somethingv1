@@ -35,6 +35,14 @@ async def run(names: list[str], limit: int | None, replicates: int, out_dir: Pat
     from evals import suites
     from tests.fakes.node_server import FakeNode
 
+    # Every agent_* collection is emptied below: only ever in a database named agent_eval.
+    if db.db().name != "agent_eval":
+        raise SystemExit(f"refusing to wipe database {db.db().name!r}: evals run only in agent_eval")
+    try:
+        await db.client().admin.command("ping")
+    except Exception as e:  # noqa: BLE001 - one clear line instead of a 30 s pymongo traceback
+        raise SystemExit(f"can't reach MongoDB for the evals ({type(e).__name__}). Start it first (npm run dev:memory in "
+                         "Mutiny_backend_private, or set EVAL_MONGO_URI).") from None
     await db.ensure_indexes()
     for name in list(db.INDEXES) + list(db.CHECKPOINT_COLLECTIONS):
         await db.db()[name].delete_many({})

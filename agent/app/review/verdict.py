@@ -1,8 +1,8 @@
 """Nothing's verdict as code (R1, R2). Three founder-facing labels, about evidence, not odds:
 
   Needs evidence  iff at least 2 of the samples call the same assumption blocking AND at least one
-                  of those blocking votes cites a claim or evidence (R2); or the majority says an
-                  assumption is contradicted by what was cited.
+                  of those blocking votes cites a claim or evidence (R2); or at least 2 samples say,
+                  citing it, that an important assumption is contradicted by the record.
   Almost there    any important-or-worse point whose evidence is unverified or unknown, or
                   (proposed cap, open item for Somay) nothing verified exists yet: until the
                   verifiers ship (phase D), "Ready" would mean "nobody checked".
@@ -23,8 +23,9 @@ def verdict(rows: list[dict], *, min_agreeing: int = 2, verified_count: int = 0,
         if r["blocking_votes"] >= min_agreeing and r["blocking_cited_votes"] >= 1:
             trace.append(f"{r['assumption_id']}: {r['blocking_votes']} blocking votes, {r['blocking_cited_votes']} cited")
             return {"label": "needs_evidence", "rule_trace": trace}
-        if r["evidence_status"] == "contradicted" and r["cites"] and r["severity"] in ("blocking", "important"):
-            trace.append(f"{r['assumption_id']}: majority contradicted, cited")
+        if (r["evidence_status"] == "contradicted" and r.get("contradicted_cited_votes", 0) >= min_agreeing
+                and r["severity"] in ("blocking", "important")):
+            trace.append(f"{r['assumption_id']}: {r['contradicted_cited_votes']} samples found it contradicted, with cites")
             return {"label": "needs_evidence", "rule_trace": trace}
     open_points = [r for r in rows if r["severity"] in ("blocking", "important") and r["evidence_status"] in ("unverified", "unknown")]
     if open_points:

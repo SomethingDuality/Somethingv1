@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 from app.api import sse
 from app.api.deps import Caller, require_user, service
+from app.core import db
 from app.review import service as reviews
 from app.review import store
 
@@ -42,18 +43,37 @@ async def start(body: StartIn, caller: Caller = Depends(service)):
     return await reviews.start(_founder(caller), caller.tz, idea_id=body.ideaId, text=body.text, readers=body.readers)
 
 
+async def _with_last_event(doc: dict, seq: int) -> dict:
+    """The view plus the run's last event id, so a reloaded page resumes the stream after it
+    (replaying from 0 would bring back old pauses). The id is read before the view: an event in
+    between is then replayed (applying it twice changes nothing), never skipped."""
+    return {**doc["view"], "lastEventId": seq}
+
+
+async def _seq(review_id: str) -> int:
+    run = await db.col("agent_runs").find_one({"_id": review_id}, {"seq": 1})
+    return int((run or {}).get("seq") or 0)
+
+
 @router.get("/latest")
 async def latest(ideaId: str | None = None, caller: Caller = Depends(service)):
-    doc = await store.latest(_founder(caller), ideaId)
-    return {"review": doc["view"] if doc else None}
+    user_id = _founder(caller)
+    head = await store.latest(user_id, ideaId)
+    if not head:
+        return {"review": None}
+    seq = await _seq(head["_id"])
+    doc = await store.get(head["_id"], user_id) or head
+    return {"review": await _with_last_event(doc, seq)}
 
 
 @router.get("/{review_id}")
 async def get_one(review_id: str, caller: Caller = Depends(service)):
-    doc = await store.get(review_id, _founder(caller))
+    user_id = _founder(caller)
+    seq = await _seq(review_id)
+    doc = await store.get(review_id, user_id)
     if not doc:
         raise HTTPException(status_code=404, detail={"code": "not_found", "message": "Not found."})
-    return {"review": doc["view"]}
+    return {"review": await _with_last_event(doc, seq)}
 
 
 @router.get("/{review_id}/stream")

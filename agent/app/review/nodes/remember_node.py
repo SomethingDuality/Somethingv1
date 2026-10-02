@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from app.core import jobs
 from app.memory.ingest import idea_scope
 from app.review import store
+from app.review.graph.route import _open_risks
 from app.review.graph.state import ReviewState
 
 
@@ -24,5 +25,8 @@ async def remember_node(state: ReviewState) -> dict:
         } for r in rows]
         await jobs.enqueue("candidates", scope["scope_key"], user_id=state["user_id"], idea_id=state["idea_id"],
                            payload={"scope": scope, "candidates": cands}, dedupe_key=f"review-remember:{state['review_id']}")
-    await store.save(state, status="awaiting_reaction" if rows else "running")
-    return {"status": "awaiting_reaction" if rows else state.get("status", "running")}
+    # "Waiting for you" only when the graph will actually pause (the same test as the route);
+    # otherwise it goes on to finalize and a reaction would be refused.
+    waits = bool(_open_risks(state))
+    await store.save(state, status="awaiting_reaction" if waits else "running")
+    return {"status": "awaiting_reaction" if waits else state.get("status", "running")}

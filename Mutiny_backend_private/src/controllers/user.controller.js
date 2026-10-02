@@ -9,6 +9,7 @@ const {
 const { createResetToken, hashResetToken } = require('../utils/resetToken.util.js');
 const mailer = require('../utils/mailer.js');
 const google = require('../auth/google.js');
+const crypto = require('crypto');
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const MAX_NAME = 100;
@@ -35,13 +36,46 @@ const publicUser = (user) => ({
 	plan: user.plan,
 });
 
-// Issues a fresh token pair, stores the refresh token and sets both cookies.
+const MAX_SESSIONS = 10;           // devices signed in at once; the oldest goes first
+const REFRESH_GRACE_MS = 30 * 1000; // a tab that raced another tab's rotation still gets through
+const sha256 = (t) => crypto.createHash('sha256').update(String(t)).digest('hex');
+
+// Starts a new session for this device: its own refresh token, stored as a hash (X-47). Signing
+// in elsewhere never signs this device out.
 const startSession = async (res, user) => {
-	const accessToken  = generateAccessToken(user);
-	const refreshToken = generateRefreshToken(user);
-	await BaseUser.updateOne({ _id: user._id }, { $set: { refreshToken } });
-	res.cookie('accessToken',  accessToken,  ACCESS_COOKIE_OPTS);
+	const sid = crypto.randomBytes(12).toString('hex');
+	const refreshToken = generateRefreshToken(user, sid);
+	const now = new Date();
+	await BaseUser.updateOne({ _id: user._id }, { $push: { sessions: {
+		$each: [{ sid, hash: sha256(refreshToken), prevHash: null, rotatedAt: now, createdAt: now }], $slice: -MAX_SESSIONS,
+	} } });
+	res.cookie('accessToken',  generateAccessToken(user, sid), ACCESS_COOKIE_OPTS);
 	res.cookie('refreshToken', refreshToken, REFRESH_COOKIE_OPTS);
+	return sid;
+};
+
+// The session id from either cookie (expired tokens included: logging out must still work).
+const sessionIdOf = (req) => {
+	for (const [name, verify] of [['refreshToken', verifyRefreshToken], ['accessToken', verifyAccessToken]]) {
+		const token = req.cookies?.[name];
+		if (!token) continue;
+		try {
+			const d = verify(token);
+			if (d?.sid) return { userId: d._id, sid: d.sid };
+		} catch {
+			const d = require('jsonwebtoken').decode(token);
+			if (d?.sid && d?._id) return { userId: d._id, sid: d.sid };
+		}
+	}
+	return null;
+};
+
+// Emails a link that proves the address is theirs (24 h, single use).
+const sendVerification = async (user) => {
+	const { token, hash, expiresAt } = createResetToken(24 * 60 * 60 * 1000);
+	await BaseUser.updateOne({ _id: user._id }, { $set: { emailVerifyTokenHash: hash, emailVerifyExpires: expiresAt } });
+	const base = process.env.APP_BASE_URL || 'http://localhost:3000';
+	await mailer.sendEmailVerification(user.email, `${base}/verify?token=${encodeURIComponent(token)}`);
 };
 
 const normalizeRole = (role) => {
@@ -96,6 +130,7 @@ const signup = async (req, res) => {
 		});
 
 		await startSession(res, newUser);
+		await sendVerification(newUser).catch((err) => console.error('[SIGNUP] verification email:', err.message));
 
 		return res.status(201).json({ success: true, message: 'Account created successfully', user: publicUser(newUser) });
 	} catch (err) {
@@ -110,7 +145,7 @@ const signup = async (req, res) => {
 const login = async (req, res) => {
 	let { email, password } = req.body || {};
 
-	if (!email || !password) {
+	if (!email || !password || typeof password !== 'string') {
 		return res.status(400).json({ success: false, message: 'Email and password are required' });
 	}
 
@@ -142,7 +177,7 @@ const login = async (req, res) => {
 
 const me = async (req, res) => {
 	try {
-		const user = await BaseUser.findById(req.user._id).select('-refreshToken').lean();
+		const user = await BaseUser.findById(req.user._id).lean();
 		if (!user) {
 			return res.status(404).json({ success: false, message: 'User not found' });
 		}
@@ -154,7 +189,8 @@ const me = async (req, res) => {
 			plan:          user.plan,
 			avatarUrl:     user.avatar || null,
 			hasPassword:   Boolean(user.password),
-			isAdmin:       require('../middleware/admin.middleware.js').isAdminEmail(user.email),
+			emailVerified: Boolean(user.emailVerified),
+			isAdmin:       require('../middleware/admin.middleware.js').isAdmin(user),
 			authProviders: user.authProviders?.length ? user.authProviders : ['password'],
 			// Investors only: Ghost Mode is on unless they turned it off (C5).
 			...(user.role === 'Investor' && { ghostMode: user.ghostMode !== false }),
@@ -166,81 +202,26 @@ const me = async (req, res) => {
 };
 
 
+// Ends this device's session only; other devices stay signed in.
 const logout = async (req, res) => {
-	const accessToken  = req.cookies?.accessToken;
-	const refreshToken = req.cookies?.refreshToken;
-
-	if (!accessToken && !refreshToken) {
-		return res.status(400).json({
-			success: false,
-			message: 'No active session found'
-		});
-	}
-
 	const CLEAR_OPTS = {
 		httpOnly: true,
 		secure:   process.env.NODE_ENV === 'production',
 		sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax'
 	};
-
+	const session = sessionIdOf(req);
+	if (!session && !req.cookies?.accessToken && !req.cookies?.refreshToken) {
+		return res.status(400).json({ success: false, message: 'No active session found' });
+	}
 	try {
-		let userId = null;
-
-		if (accessToken) {
-			try {
-				const decoded = verifyAccessToken(accessToken);
-				userId = decoded._id;
-			} catch {
-		
-			}
-		}
-
-		if (!userId && refreshToken) {
-			try {
-				const decoded = verifyRefreshToken(refreshToken);
-				userId = decoded._id;
-			} catch {
-				
-			}
-		}
-
-		if (userId) {
-			const updated = await BaseUser.findByIdAndUpdate(
-				userId,
-				{ $unset: { refreshToken: '' } }
-			);
-
-			if (!updated) {
-				
-				res.clearCookie('accessToken',  CLEAR_OPTS);
-				res.clearCookie('refreshToken', CLEAR_OPTS);
-				return res.status(404).json({
-					success: false,
-					message: 'User not found — cookies cleared'
-				});
-			}
-		}
-
-		
-		res.clearCookie('accessToken',  CLEAR_OPTS);
-		res.clearCookie('refreshToken', CLEAR_OPTS);
-
-		return res.status(200).json({
-			success: true,
-			message: 'Logged out successfully'
-		});
-
+		if (session) await BaseUser.updateOne({ _id: session.userId }, { $pull: { sessions: { sid: session.sid } } });
+		return res.status(200).json({ success: true, message: 'Logged out successfully' });
 	} catch (err) {
 		console.error('logout error:', err);
-
-		
+		return res.status(500).json({ success: false, message: 'Logout encountered an error, but session has been cleared' });
+	} finally {
 		res.clearCookie('accessToken',  CLEAR_OPTS);
 		res.clearCookie('refreshToken', CLEAR_OPTS);
-
-		return res.status(500).json({
-			success: false,
-			message: 'Logout encountered an error, but session has been cleared'
-		});
 	}
 };
 
@@ -293,64 +274,67 @@ module.exports = {
 	delete_account,
 	dev_login_status,
 	dev_login,
+	verify_email,
+	resend_verification,
 };
 
 
 
 
+// Rotates this device's refresh token. A token that was just rotated by another tab (within
+// REFRESH_GRACE_MS) gets a new access token and leaves the refresh cookie alone; any other old
+// token means reuse, and only this device's session ends (X-47: it used to end every session).
 async function refresh(req, res) {
+	const CLEAR_OPTS = {
+		httpOnly: true,
+		secure:   process.env.NODE_ENV === 'production',
+		sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax',
+	};
+	const denied = (message) => {
+		res.clearCookie('accessToken',  CLEAR_OPTS);
+		res.clearCookie('refreshToken', CLEAR_OPTS);
+		return res.status(401).json({ success: false, message });
+	};
 	const refreshToken = req.cookies?.refreshToken;
-
 	if (!refreshToken) {
-		return res.status(401).json({
-			success: false,
-			message: 'No refresh token — please log in again',
-		});
+		return res.status(401).json({ success: false, message: 'No refresh token — please log in again' });
 	}
 
 	try {
-		
 		let decoded;
 		try {
 			decoded = verifyRefreshToken(refreshToken);
 		} catch {
-			return res.status(401).json({
-				success: false,
-				message: 'Refresh token invalid or expired — please log in again',
-			});
+			return denied('Refresh token invalid or expired — please log in again');
 		}
+		if (!decoded.sid) return denied('Please log in again');
 
-		
-		
-		const user = await BaseUser.findById(decoded._id).select('_id role refreshToken');
-		if (!user) {
-			return res.status(401).json({ success: false, message: 'User not found' });
+		const user = await BaseUser.findById(decoded._id).select('_id role +sessions').lean();
+		const session = user?.sessions?.find((x) => x.sid === decoded.sid);
+		if (!session) return denied('This session has ended — please log in again');
+
+		const hash = sha256(refreshToken);
+		if (hash === session.hash) {
+			const next = generateRefreshToken(user, decoded.sid);
+			// Conditional on the hash: of two refreshes at once, exactly one rotates.
+			const won = await BaseUser.updateOne(
+				{ _id: user._id, sessions: { $elemMatch: { sid: decoded.sid, hash } } },
+				{ $set: { 'sessions.$.hash': sha256(next), 'sessions.$.prevHash': hash, 'sessions.$.rotatedAt': new Date() } },
+			);
+			if (won.matchedCount) {
+				res.cookie('accessToken',  generateAccessToken(user, decoded.sid), ACCESS_COOKIE_OPTS);
+				res.cookie('refreshToken', next, REFRESH_COOKIE_OPTS);
+				return res.status(200).json({ success: true });
+			}
+			const fresh = await BaseUser.findById(user._id).select('+sessions').lean();
+			Object.assign(session, fresh?.sessions?.find((x) => x.sid === decoded.sid) || { prevHash: null });
 		}
-
-		if (!user.refreshToken || user.refreshToken !== refreshToken) {
-			
-			
-			await BaseUser.findByIdAndUpdate(decoded._id, { $unset: { refreshToken: '' } });
-
-			const CLEAR_OPTS = {
-				httpOnly: true,
-				secure:   process.env.NODE_ENV === 'production',
-				sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax',
-			};
-			res.clearCookie('accessToken',  CLEAR_OPTS);
-			res.clearCookie('refreshToken', CLEAR_OPTS);
-
-			return res.status(401).json({
-				success: false,
-				message: 'Token reuse detected — all sessions invalidated. Please log in again.',
-			});
+		if (hash === session.prevHash && Date.now() - new Date(session.rotatedAt).getTime() < REFRESH_GRACE_MS) {
+			res.cookie('accessToken', generateAccessToken(user, decoded.sid), ACCESS_COOKIE_OPTS);
+			return res.status(200).json({ success: true });
 		}
-
-
-		await startSession(res, user);
-
-		return res.status(200).json({ success: true });
-
+		await BaseUser.updateOne({ _id: user._id }, { $pull: { sessions: { sid: decoded.sid } } });
+		return denied('This sign-in was used somewhere else, so it was ended. Please log in again.');
 	} catch (err) {
 		console.error('refresh error:', err);
 		return res.status(500).json({ success: false, message: 'Something went wrong, please try again' });
@@ -363,6 +347,38 @@ async function refresh(req, res) {
 
 // Always answers the same way, whether or not the account exists (no user enumeration).
 // The reset link is emailed; the token is never returned to the client.
+// POST /auth/verify-email { token }: the link from the signup email.
+async function verify_email(req, res) {
+	const token = typeof req.body?.token === 'string' ? req.body.token : '';
+	if (!token) return res.status(400).json({ success: false, message: 'This link is incomplete' });
+	try {
+		const done = await BaseUser.findOneAndUpdate(
+			{ emailVerifyTokenHash: hashResetToken(token), emailVerifyExpires: { $gt: new Date() } },
+			{ $set: { emailVerified: true }, $unset: { emailVerifyTokenHash: '', emailVerifyExpires: '' } },
+		);
+		if (!done) return res.status(400).json({ success: false, message: 'This link is invalid or has expired' });
+		return res.status(200).json({ success: true, message: 'Email verified' });
+	} catch (err) {
+		console.error('verify_email error:', err);
+		return res.status(500).json({ success: false, message: 'Something went wrong, please try again' });
+	}
+}
+
+// POST /auth/verify-email/resend (signed in): a new link, for whoever lost the first one.
+async function resend_verification(req, res) {
+	try {
+		const user = await BaseUser.findById(req.user._id).select('email emailVerified').lean();
+		if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+		if (user.emailVerified) return res.status(200).json({ success: true, message: 'Your email is already verified' });
+		await sendVerification(user);
+		return res.status(200).json({ success: true, message: 'We sent a new link' });
+	} catch (err) {
+		console.error('resend_verification error:', err);
+		return res.status(500).json({ success: false, message: 'Something went wrong, please try again' });
+	}
+}
+
+
 async function forgot_password(req, res) {
 	const { email } = req.body || {};
 
@@ -415,13 +431,13 @@ async function reset_password(req, res) {
 			return res.status(400).json({ success: false, message: pwError });
 		}
 
-		// Single use: clearing the hash makes the same link fail next time.
-		// Clearing refreshToken signs out every other session.
+		// Single use: clearing the hash makes the same link fail next time. Every session ends; the
+		// link proved the email, so it's verified too.
 		await BaseUser.updateOne(
 			{ _id: user._id },
 			{
-				$set:      { password: await hashPassword(newPassword) },
-				$unset:    { passwordResetTokenHash: '', passwordResetExpires: '', refreshToken: '' },
+				$set:      { password: await hashPassword(newPassword), sessions: [], emailVerified: true },
+				$unset:    { passwordResetTokenHash: '', passwordResetExpires: '' },
 				$addToSet: { authProviders: 'password' },
 			}
 		);
@@ -445,7 +461,8 @@ async function change_password(req, res) {
 
 		if (user.password) {
 			const ok = await comparePasswords(String(currentPassword || ''), user.password);
-			if (!ok) return res.status(401).json({ success: false, message: 'Current password is incorrect' });
+			// 400, not 401: a 401 makes the app refresh the session and send it again.
+			if (!ok) return res.status(400).json({ success: false, message: 'Current password is incorrect' });
 			if (await comparePasswords(String(newPassword || ''), user.password)) {
 				return res.status(400).json({ success: false, message: 'New password must be different from the current one' });
 			}
@@ -454,12 +471,11 @@ async function change_password(req, res) {
 		const pwError = validatePassword(newPassword, { email: user.email });
 		if (pwError) return res.status(400).json({ success: false, message: pwError });
 
+		// Other devices are signed out; this one starts a fresh session and stays in.
 		await BaseUser.updateOne(
 			{ _id: user._id },
-			{ $set: { password: await hashPassword(newPassword) }, $addToSet: { authProviders: 'password' } }
+			{ $set: { password: await hashPassword(newPassword), sessions: [] }, $addToSet: { authProviders: 'password' } }
 		);
-
-		// Rotate the session so other devices are signed out but this one stays in.
 		await startSession(res, user);
 
 		return res.status(200).json({ success: true, message: 'Password updated' });
@@ -495,13 +511,17 @@ async function google_auth(req, res) {
 		let isNew = false;
 
 		if (!user) {
-			user = await BaseUser.findOne({ email });
+			user = await BaseUser.findOne({ email }).select('+emailVerified');
 			if (user) {
-				// Same verified email: link Google to the existing account.
-				await BaseUser.updateOne(
-					{ _id: user._id },
-					{ $set: { googleId: profile.googleId }, $addToSet: { authProviders: 'google' } }
-				);
+				// Google proves this person owns the email. A password on an account whose email was
+				// never verified may belong to someone who signed up with this address first: it's
+				// removed and its sessions end (the owner can set a new one). Then Google is linked.
+				const unproven = Boolean(user.password) && !user.emailVerified;
+				await BaseUser.updateOne({ _id: user._id }, {
+					$set: { googleId: profile.googleId, emailVerified: true, ...(unproven && { sessions: [] }) },
+					...(unproven ? { $unset: { password: '' }, $pull: { authProviders: 'password' } } : { $addToSet: { authProviders: 'google' } }),
+				});
+				if (unproven) await BaseUser.updateOne({ _id: user._id }, { $addToSet: { authProviders: 'google' } });
 			}
 		}
 
@@ -519,6 +539,7 @@ async function google_auth(req, res) {
 				plan:           'free',
 				accepted_terms: true,
 				authProviders:  ['google'],
+				emailVerified:  true,
 			});
 			isNew = true;
 		}
@@ -549,7 +570,7 @@ async function delete_account(req, res) {
 
 	try {
 		// Guard against one-click deletion: the user types their email to confirm.
-		const account = await BaseUser.findById(userId).select('email').lean();
+		const account = await BaseUser.findById(userId).select('email avatar').lean();
 		const confirmEmail = String(req.body?.confirmEmail || '').toLowerCase().trim();
 		if (!account || confirmEmail !== account.email) {
 			return res.status(400).json({ success: false, message: 'Type your account email to confirm deletion' });
@@ -636,7 +657,7 @@ async function delete_account(req, res) {
 			}
 			await Report.deleteMany({ targetType: 'comment', targetId: { $in: comments.map((c) => c._id) } });
 			await Comment.deleteMany({ userId });
-			await cache.del(...new Set(comments.filter((c) => c.targetType !== 'Problem').map((c) => `comments:v1:${c.postID}`)));
+			await cache.del(...new Set(comments.filter((c) => c.targetType !== 'Problem').map((c) => `comments:v2:${c.postID}`)));
 		}
 		// Reports they filed are withdrawn, and votes they cast come back off the counts.
 		await forgetReporter(userId);
@@ -647,8 +668,15 @@ async function delete_account(req, res) {
 		await require('../services/teams.service.js').forgetInvites(userId);
 		// Everything the agent stored about them: memory, reviews, runs, checkpoints, usage (P16).
 		await require('../agent/purge.js').purgeAgentForUser(userId);
+		// The Something box's questions and answers, including memory confirms that quote their
+		// values ("Pune → Bangalore, right?").
+		await Promise.all([
+			require('../models/questionState.model.js').QuestionState.deleteMany({ userId }),
+			require('../models/questionCadence.model.js').QuestionCadence.deleteMany({ userId }),
+		]);
 
-		
+		// Their picture goes too (only our own uploads; a Google photo URL is left alone).
+		await require('../utils/uploads.js').removeAvatar(account.avatar);
 		await BaseUser.findByIdAndDelete(userId);
 
 		

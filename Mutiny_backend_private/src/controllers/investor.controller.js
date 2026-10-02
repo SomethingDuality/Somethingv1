@@ -1,4 +1,5 @@
 const { Investor } = require('../models/user.model.js');
+const uploads = require('../utils/uploads.js');
 const { applyUpdate, FieldError } = require('../profile/applyUpdate.js');
 const tax = require('../shared/taxonomy.js');
 const { PUBLIC_IDEA } = require('../community/targets.js');
@@ -171,7 +172,10 @@ const update_ghost_mode = async (req, res) => {
 };
 
 const update_avatar = async (req, res) => {
-	if (!assertInvestor(req, res)) return;
+	if (!assertInvestor(req, res)) {
+		if (req.file) await uploads.removeStored(uploads.AVATARS_DIR, req.file.filename);
+		return;
+	}
 
 	if (!req.file)
 		return res.status(400).json({ success: false, message: 'No file uploaded' });
@@ -179,9 +183,11 @@ const update_avatar = async (req, res) => {
 	const url = `/uploads/avatars/${req.file.filename}`;
 
 	try {
-		await Investor.findByIdAndUpdate(req.user._id, { avatar: url });
+		const before = await Investor.findByIdAndUpdate(req.user._id, { avatar: url }).select('avatar').lean();
+		await uploads.removeAvatar(before?.avatar); // the old picture doesn't stay on disk
 		return res.status(200).json({ success: true, url });
 	} catch (err) {
+		await uploads.removeStored(uploads.AVATARS_DIR, req.file.filename);
 		console.error('investor update_avatar:', err);
 		return res.status(500).json({ success: false, message: 'Internal server error' });
 	}

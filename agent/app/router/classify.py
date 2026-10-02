@@ -51,8 +51,8 @@ def classify_turn(text: str, has_context: bool) -> dict:
         return {"kind": "new_idea"}
     if _QUESTION.search(t) or words < 12:
         return {"kind": "about_this"}
-    if words >= 35:
-        return {"kind": "new_idea"}
+    # A long statement in a conversation is usually an update about this idea, not a new pitch: the
+    # LITE refine decides (it falls back to about_this), so an update never burns a review.
     return {"kind": "unsure"}
 
 

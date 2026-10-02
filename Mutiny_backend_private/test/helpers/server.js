@@ -11,6 +11,7 @@ process.env.REFRESH_TOKEN_SECRET = 'test_refresh_secret';
 process.env.RATE_LIMIT_MULTIPLIER = process.env.RATE_LIMIT_MULTIPLIER || '100';
 process.env.APP_BASE_URL         = 'http://localhost:3000';
 process.env.MAIL_TRANSPORT       = 'console';
+process.env.DEV_TOOLS            = 'true';
 // Node <-> agent: a fake agent (helpers/fakeAgent.js) and the real internal listener.
 process.env.NODE_TO_AGENT_KEY    = 'test-node-to-agent';
 process.env.AGENT_TO_NODE_KEY    = 'test-agent-to-node';
@@ -89,7 +90,22 @@ const agent = () => {
 	};
 };
 
+// What the emailed verification link does (the link itself is tested in auth.test.js). Admins
+// need a verified email.
+const verifyEmail = async (email) => {
+	const { BaseUser } = require('../../src/models/user.model.js');
+	await BaseUser.updateOne({ email: String(email).toLowerCase() }, { $set: { emailVerified: true } });
+};
+
+// An account whose reports count toward hiding: verified email, a day old. createdAt is written
+// through the raw collection (Mongoose keeps it immutable).
+const trustReporter = async (email) => {
+	const { BaseUser } = require('../../src/models/user.model.js');
+	await BaseUser.collection.updateOne({ email: String(email).toLowerCase() },
+		{ $set: { emailVerified: true, createdAt: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000) } });
+};
+
 // Wait for in-process event handlers (setImmediate) to finish.
 const settle = (ms = 50) => new Promise((r) => setTimeout(r, ms));
 
-module.exports = { start, stop, resetDb, agent, settle, internal, baseUrl: () => baseUrl, fakeAgent: () => fakeAgent };
+module.exports = { start, stop, resetDb, agent, settle, internal, verifyEmail, trustReporter, baseUrl: () => baseUrl, fakeAgent: () => fakeAgent };

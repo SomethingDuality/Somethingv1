@@ -10,8 +10,23 @@ from app.core.quotas import add_spend
 _PRICES = json.loads((Path(__file__).parent / "pricing.json").read_text())
 
 
+def _price(model: str) -> dict:
+    """A model's price. A Claude id missing from pricing.json (say a new dated snapshot set in the
+    env) is priced as its family, never as free: a $0 price would let spend pass the daily cap."""
+    if model in _PRICES:
+        return _PRICES[model]
+    for family in ("claude-haiku", "claude-sonnet", "claude-opus"):
+        if model.startswith(family):
+            known = [v for k, v in _PRICES.items() if k.startswith(family)]
+            if known:
+                return max(known, key=lambda v: v.get("output", 0))
+    if model.startswith("claude"):
+        return max((v for k, v in _PRICES.items() if k.startswith("claude")), key=lambda v: v.get("output", 0))
+    return _PRICES["default"]
+
+
 def cost_usd(model: str, input_tokens: int = 0, output_tokens: int = 0, cache_read: int = 0, cache_write: int = 0) -> float:
-    p = _PRICES.get(model, _PRICES["default"])
+    p = _price(model)
     plain_input = max(0, input_tokens - cache_read - cache_write)
     return round(
         (plain_input * p.get("input", 0)
@@ -30,7 +45,10 @@ def tokens_from(message) -> dict:
         "input_tokens": int(meta.get("input_tokens") or 0),
         "output_tokens": int(meta.get("output_tokens") or 0),
         "cache_read_input_tokens": int(details.get("cache_read") or 0),
-        "cache_creation_input_tokens": int(details.get("cache_creation") or 0),
+        # With a per-TTL breakdown, langchain-anthropic zeroes cache_creation and reports the writes
+        # as ephemeral_5m/1h_input_tokens: count them all as cache writes.
+        "cache_creation_input_tokens": int(details.get("cache_creation") or 0) + int(details.get("ephemeral_5m_input_tokens") or 0)
+                                       + int(details.get("ephemeral_1h_input_tokens") or 0),
     }
 
 

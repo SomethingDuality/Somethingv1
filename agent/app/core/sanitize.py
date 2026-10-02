@@ -12,7 +12,7 @@ import re
 import unicodedata
 
 _INVISIBLE = re.compile(
-    "[\U000e0000-\U000e007f​-‏‪-‮⁠-⁤⁦-⁩︀-️﻿]"
+    "[\U000e0000-\U000e007f\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufe00-\ufe0f\ufeff]"
 )
 _CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
@@ -20,8 +20,8 @@ _SIGNALS = {
     "ignore_instructions": re.compile(r"\b(ignore|disregard|forget)\b.{0,40}\b(previous|above|prior|earlier|all)\b.{0,40}\b(instructions?|prompts?|rules?)\b", re.I | re.S),
     "role_claim": re.compile(r"\b(you are now|act as|system prompt|developer message)\b", re.I),
     "fake_verdict": re.compile(r"(\"?(verdict|label|evidence_status|severity|relation)\"?\s*:\s*\"?(ready|almost|needs|blocking|same|refines)|needs evidence\s*/\s*almost there)", re.I),
-    "template_forgery": re.compile(r"(#{2,}\s*(model outputs?|system|assistant|judge)|</?\s*founder_text\s*>|thought process\s*:)", re.I),
-    "invisible_text": re.compile("[\U000e0000-\U000e007f​-‏‪-‮⁦-⁩]"),
+    "template_forgery": re.compile(r"(#{2,}\s*(model outputs?|system|assistant|judge)|<\s*/?\s*founder_text\b[^>]*>|thought process\s*:)", re.I),
+    "invisible_text": re.compile("[\U000e0000-\U000e007f\u200b-\u200f\u202a-\u202e\u2066-\u2069]"),
 }
 
 
@@ -39,5 +39,5 @@ def signals(raw: str | None) -> list[str]:
 
 def spotlight(text: str, tag: str = "founder_text") -> str:
     # The founder can't close our delimiter: any copy of the tag inside the text is defused.
-    safe = re.sub(rf"</?\s*{tag}\s*>", "[tag removed]", text, flags=re.I)
+    safe = re.sub(rf"<\s*/?\s*{tag}\b[^>]*>", "[tag removed]", text, flags=re.I)
     return f"<{tag}>\n{safe}\n</{tag}>"

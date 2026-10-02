@@ -30,7 +30,8 @@ export function NothingReply({
   onReact: (r: Reaction) => void
 }) {
   const n = review.nothing
-  if (!n) return null
+  if (!n?.verdict) return null
+  const risks = n.risks ?? []
   const canReact = review.status === "awaiting_reaction"
   return (
     <div className="space-y-5">
@@ -40,9 +41,9 @@ export function NothingReply({
         <p className="mt-1 text-sm text-muted-foreground">{n.verdict.about}</p>
       </div>
 
-      {n.risks.length > 0 && (
+      {risks.length > 0 && (
         <ol className="space-y-4">
-          {n.risks.map((r, i) => (
+          {risks.map((r, i) => (
             <RiskItem key={r.id} risk={r} index={i} canReact={canReact && REACTABLE.has(r.status)} busy={busy}
               roundsLeft={Math.max(0, review.maxRounds - review.round)} onReact={onReact} />
           ))}
@@ -137,17 +138,20 @@ function RiskItem({ risk: r, index, canReact, busy, roundsLeft, onReact }: {
 export function SomethingReply({ review }: { review: ReviewView }) {
   const s = review.something
   if (!s) return null
-  if (s.unavailable && !s.address.length) {
+  // Lists may be missing from a partial event or an older stored view.
+  const strengths = s.strengths ?? []
+  const address = s.address ?? []
+  if (s.unavailable && !address.length) {
     return <p className="text-[15px] leading-relaxed text-muted-foreground">I couldn&apos;t read this one just now. Nothing&apos;s review above stands on its own.</p>
   }
   const titles = new Map((review.nothing?.risks ?? []).map((r, i) => [r.id, `${i + 1}. ${r.title}`]))
   return (
     <div className="space-y-5">
-      {s.strengths.length > 0 && (
+      {strengths.length > 0 && (
         <section>
           <h4 className="text-sm text-muted-foreground">What&apos;s strong</h4>
           <ul className="mt-2 space-y-1.5">
-            {s.strengths.map((x) => (
+            {strengths.map((x) => (
               <li key={x.text} className="flex gap-3 text-[15px] leading-relaxed">
                 <span className="mt-[9px] size-1.5 shrink-0 rounded-full bg-gold" aria-hidden="true" />
                 {x.text}
@@ -156,11 +160,11 @@ export function SomethingReply({ review }: { review: ReviewView }) {
           </ul>
         </section>
       )}
-      {s.address.length > 0 && (
+      {address.length > 0 && (
         <section>
           <h4 className="text-sm text-muted-foreground">How to answer Nothing</h4>
           <ul className="mt-2 space-y-3">
-            {s.address.map((a) => (
+            {address.map((a) => (
               <li key={a.riskId} className="text-[15px] leading-relaxed">
                 {titles.get(a.riskId) && <span className="block text-sm text-muted-foreground">{titles.get(a.riskId)}</span>}
                 {a.text}

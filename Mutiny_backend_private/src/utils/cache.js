@@ -32,4 +32,21 @@ const del = async (...keys) => {
 	}
 };
 
-module.exports = { getJSON, setJSON, del };
+// Deletes every key matching a pattern (SCAN, never KEYS). For small cached families like
+// popular_posts:v1:* that must drop at once when an idea leaves the public view.
+const delPattern = async (pattern) => {
+	if (!client.isReady) return;
+	try {
+		for await (const batch of client.scanIterator({ MATCH: pattern, COUNT: 200 })) {
+			const keys = Array.isArray(batch) ? batch : [batch];
+			if (keys.length) await client.del(keys);
+		}
+	} catch (err) {
+		console.error(`[Cache] delPattern ${pattern}:`, err.message);
+	}
+};
+
+// An idea joined or left the public view: the lists that show public ideas drop at once (X-92).
+const dropPublicLists = () => Promise.all([delPattern('popular_posts:v1:*'), delPattern('leaderboard:v1:*')]);
+
+module.exports = { getJSON, setJSON, del, delPattern, dropPublicLists };

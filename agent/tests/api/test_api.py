@@ -69,3 +69,27 @@ async def test_erase_cancels_running_work(app_client):
     res = await app_client.post("/internal/erase", json={"userId": "u9"}, headers=SERVICE)
     assert res.json()["cancelled"] == 1
     assert (await db.col("agent_runs").find_one({"_id": run_id}))["status"] == "cancelled"
+
+
+async def test_erase_stops_a_job_that_is_already_running(app_client):
+    """P16: a job mid-way when the founder deletes their account never writes afterwards."""
+    from app.core import db, jobs
+    started, release = asyncio.Event(), asyncio.Event()
+
+    @jobs.handler("probe_erase")
+    async def probe(job):
+        started.set()
+        await release.wait()
+        await db.col("agent_notes").insert_one({"user_id": job["user_id"], "text": "written after erase"})
+
+    await jobs.enqueue("probe_erase", "f:u10", user_id="u10", payload={})
+    jobs.worker.wake()
+    await asyncio.wait_for(started.wait(), 5)
+    res = await app_client.post("/internal/erase", json={"userId": "u10"}, headers=SERVICE)
+    assert res.status_code == 200
+    release.set()
+    await asyncio.sleep(0.1)
+    assert await db.col("agent_notes").count_documents({"user_id": "u10"}) == 0
+    job = await db.col("agent_jobs").find_one({"kind": "probe_erase"})
+    assert job["status"] == "cancelled", job["status"]
+    jobs.HANDLERS.pop("probe_erase", None)

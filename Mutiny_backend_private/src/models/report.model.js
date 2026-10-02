@@ -15,6 +15,7 @@ const reportSchema = new mongoose.Schema({
 
 reportSchema.index({ targetType: 1, targetId: 1, reporterId: 1 }, { unique: true });
 reportSchema.index({ reporterId: 1 });
+reportSchema.index({ targetId: 1 }); // the admin queue and deletions look reports up by target only
 
 const Report = mongoose.model('Report', reportSchema);
 

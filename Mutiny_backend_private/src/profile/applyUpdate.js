@@ -3,8 +3,10 @@ const { BaseUser, Founder, Investor } = require('../models/user.model.js');
 const { Idea } = require('../models/ideas.model.js');
 const cache = require('../utils/cache.js');
 const { emit } = require('../events/index.js');
+const { checkText } = require('../community/filter.js');
 
 const SOURCES = ['signup', 'profile', 'settings', 'question', 'google', 'legacy', 'agent'];
+const PUBLIC_TEXT = new Set(['name', 'headline', 'about', 'firm', 'bio', 'location', 'title', 'description']);
 
 /**
  * The one write path for user-editable fields.
@@ -23,9 +25,15 @@ async function applyUpdate({ userId, role, entity = 'user', entityId, patch, sou
 	const $unset = {};
 	const at = new Date();
 	for (const [path, raw] of Object.entries(patch)) {
-		const def = registry[path];
+		// Own keys only: "constructor" or "__proto__" must be unknown fields, not a crash.
+		const def = Object.hasOwn(registry, path) ? registry[path] : null;
 		if (!def || (def.roles && !def.roles.includes(role))) throw new FieldError(path, 'is not an editable field');
 		const value = def.set(raw, path);
+		// Text other people read goes through the word filter, whoever writes it (a profile form,
+		// the Something box, or the agent renaming an idea from the chat).
+		if (PUBLIC_TEXT.has(path) && typeof value === 'string' && checkText(value).verdict === 'block') {
+			throw new FieldError(path, "has words that aren't allowed on Something");
+		}
 		$set[path] = value;
 		// Clearing a field forgets where it came from, so the Something box may ask again.
 		if (isAnswered(value)) $set[`fieldSources.${sourceKey(path)}`] = { source, at };

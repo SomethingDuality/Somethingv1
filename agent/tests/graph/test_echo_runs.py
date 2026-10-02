@@ -72,15 +72,90 @@ async def test_subscribe_replays_then_follows_live():
 
 
 async def test_recover_drives_runs_left_running():
-    from datetime import datetime, timezone
+    from datetime import datetime, timedelta, timezone
     m = RunManager()
     m.register("echo", compile_echo(checkpointer.saver()))
+    old = datetime.now(timezone.utc) - timedelta(minutes=5)
     await db.col("agent_runs").insert_one({
         "_id": "r5", "thread_id": "u:u1:t:echo:r5", "kind": "echo", "user_id": "u1", "status": "queued",
-        "seq": 0, "owner": "dead-process", "heartbeat_at": datetime.now(timezone.utc), "started_at": datetime.now(timezone.utc),
+        "seq": 0, "owner": "dead-process", "heartbeat_at": old, "started_at": old,
     })
     # A queued run whose process died before starting has no checkpoint: recover drives it from
     # scratch only when the input is known, so here it simply reaches the end with nothing to do.
     assert await m.recover() == 1
     await m.wait("r5")
     assert (await db.col("agent_runs").find_one({"_id": "r5"}))["status"] in ("complete", "failed")
+
+
+async def test_a_live_instances_run_is_never_taken():
+    from datetime import datetime, timezone
+    m = RunManager()
+    m.register("echo", compile_echo(checkpointer.saver()))
+    now = datetime.now(timezone.utc)
+    await db.col("agent_runs").insert_one({
+        "_id": "r6", "thread_id": "u:u1:t:echo:r6", "kind": "echo", "user_id": "u1", "status": "running",
+        "seq": 0, "owner": "live-process", "heartbeat_at": now, "started_at": now,
+    })
+    assert await m.recover() == 0
+    assert (await db.col("agent_runs").find_one({"_id": "r6"}))["owner"] == "live-process"
+
+
+async def test_shutdown_releases_runs_for_the_next_process():
+    import asyncio
+
+    from app.core import runs as runs_mod
+    first = RunManager()
+    first.register("echo", compile_echo(checkpointer.saver()))
+    gate = asyncio.Event()
+    real_emit = first.emit
+
+    async def slow_emit(*a, **k):  # hold the run mid-graph, as a long model call would
+        await gate.wait()
+        return await real_emit(*a, **k)
+    first.emit = slow_emit
+    await first.start("echo", thread_id="u:u1:t:echo:r7", user_id="u1", input={"message": "keep going"}, run_id="r7")
+    await asyncio.sleep(0.1)
+    await first.shutdown()
+    run = await db.col("agent_runs").find_one({"_id": "r7"})
+    assert run["status"] in ("queued", "running") and run["owner"] is None, run
+
+    this_process, runs_mod.INSTANCE = runs_mod.INSTANCE, "next-process"
+    try:
+        second = RunManager()
+        second.register("echo", compile_echo(checkpointer.saver()))
+        assert await second.recover() == 1
+        await second.wait("r7")
+        assert (await db.col("agent_runs").find_one({"_id": "r7"}))["status"] == "interrupted"
+    finally:
+        runs_mod.INSTANCE = this_process
+        gate.set()
+
+
+async def test_parallel_emits_arrive_in_order():
+    import asyncio
+    m = RunManager()
+    await db.col("agent_runs").insert_one({"_id": "r8", "thread_id": "t", "kind": "echo", "user_id": "u1", "status": "running", "seq": 0})
+    seen: list[int] = []
+
+    async def listen():
+        async for ev in m.subscribe("r8"):
+            seen.append(ev["seq"])
+            if len(seen) == 20:
+                return
+    listener = asyncio.create_task(listen())
+    await asyncio.sleep(0.05)
+    await asyncio.gather(*[m.emit("r8", "u1", "progress", {"i": i}) for i in range(20)])
+    await asyncio.wait_for(listener, 5)
+    assert seen == list(range(1, 21))
+
+
+async def test_a_stream_on_a_stopped_run_ends():
+    import asyncio
+    m = RunManager()
+    await db.col("agent_runs").insert_one({"_id": "r9", "thread_id": "t", "kind": "echo", "user_id": "u1", "status": "cancelled", "seq": 0})
+    got = await asyncio.wait_for(_collect(m.subscribe("r9")), 5)
+    assert got == []
+
+
+async def _collect(it):
+    return [e async for e in it]

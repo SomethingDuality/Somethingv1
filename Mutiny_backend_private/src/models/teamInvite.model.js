@@ -22,6 +22,7 @@ teamInviteSchema.index({ openKey: 1 }, { unique: true, sparse: true });
 teamInviteSchema.index({ inviteeId: 1, status: 1 });
 teamInviteSchema.index({ inviterId: 1, createdAt: -1 });
 teamInviteSchema.index({ ideaId: 1 });
+teamInviteSchema.index({ status: 1, expiresAt: 1 });
 
 const TeamInvite = mongoose.model('TeamInvite', teamInviteSchema);
 

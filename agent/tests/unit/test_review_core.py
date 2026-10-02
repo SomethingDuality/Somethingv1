@@ -2,7 +2,7 @@
 truth table (R1/R2 + the cap without verified evidence)."""
 import pytest
 
-from app.core.errors import ProviderUnavailable
+from app.core.errors import ProvidersExhausted
 from app.review.aggregate import aggregate
 from app.review.relay_templates import relay_check, split_text
 from app.review.verdict import verdict
@@ -22,7 +22,7 @@ def sample(*assessments):
 
 
 def test_needs_three_or_two_usable_samples():
-    with pytest.raises(ProviderUnavailable):
+    with pytest.raises(ProvidersExhausted):
         aggregate([sample(a("a1")), {"failed": True}], ASSUMPTIONS, VALID)
 
 
@@ -81,3 +81,15 @@ def test_relay_check_rejects_softening_verdicts_and_new_numbers():
     assert not relay_check("Aim for 50 canteens.", set())
     assert relay_check("Aim for 50 canteens.", {"50"})
     assert not relay_check("Do it now!", set())
+
+
+def test_one_contradicted_sample_cannot_decide_the_verdict():
+    """R2: a three-way split, or 1 of 2 usable samples, isn't "at least 2 agree"."""
+    split = aggregate([sample(a("a1", "important", "contradicted", cites=("c1",))), sample(a("a1", "important", "unverified")),
+                       sample(a("a1", "important", "unknown"))], ASSUMPTIONS, VALID)
+    assert split[0]["evidence_status"] == "unverified"
+    assert verdict(split)["label"] == "almost_there"
+    two = aggregate([sample(a("a1", "important", "contradicted", cites=("c1",))), sample(a("a1", "important", "unverified"))], ASSUMPTIONS, VALID)
+    assert verdict(two)["label"] == "almost_there"
+    agreed = aggregate([sample(a("a1", "important", "contradicted", cites=("c1",)))] * 2 + [sample(a("a1", "important", "unverified"))], ASSUMPTIONS, VALID)
+    assert verdict(agreed)["label"] == "needs_evidence"

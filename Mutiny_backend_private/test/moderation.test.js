@@ -1,7 +1,7 @@
 // Community C1: word filter, reports, auto-hide, the admin queue and visibility of hidden items.
 const { test, before, after, beforeEach } = require('node:test');
 const assert = require('node:assert/strict');
-const { start, stop, resetDb, agent } = require('./helpers/server.js');
+const { start, stop, resetDb, agent, verifyEmail, trustReporter } = require('./helpers/server.js');
 
 let Idea, Comment, BaseUser, Report;
 
@@ -29,10 +29,16 @@ const newIdea = async (founder, extra = {}) => {
 	assert.equal(res.status, 201, JSON.stringify(res.body));
 	return res.body._id;
 };
-const reporters = (n, prefix = 'R') => Promise.all(Array.from({ length: n }, (_, i) => newUser('investor', `${prefix}${i}x`)));
+// Reporters whose reports count toward hiding (verified, a day old).
+const reporters = (n, prefix = 'R') => Promise.all(Array.from({ length: n }, async (_, i) => {
+	const r = await newUser('investor', `${prefix}${i}x`);
+	await trustReporter(r.email);
+	return r;
+}));
 const asAdmin = async (fn, admin) => {
 	const saved = process.env.ADMIN_EMAILS;
 	process.env.ADMIN_EMAILS = admin.email;
+	await verifyEmail(admin.email);
 	try { return await fn(); } finally {
 		if (saved === undefined) delete process.env.ADMIN_EMAILS; else process.env.ADMIN_EMAILS = saved;
 	}
@@ -208,4 +214,19 @@ test('notifications carry a link, and the inbox summary counts unread ones', asy
 	await fay.post('/notifications/mark-all-read');
 	assert.equal((await fay.get('/inbox/summary')).body.notifications.unread, 0);
 	assert.equal((await agent().get('/inbox/summary')).status, 401);
+});
+
+
+test("new or unverified accounts can't hide a post; their reports still reach the admin queue", async () => {
+	const cole = await newUser('founder', 'Cole');
+	const ideaId = await newIdea(cole);
+	const fresh = await Promise.all([0, 1, 2, 3, 4, 5].map((i) => newUser('investor', `F${i}x`)));
+	for (const r of fresh) assert.equal((await r.post('/reports', { type: 'idea', id: ideaId, reason: 'spam' })).status, 201);
+	const idea = await Idea.findById(ideaId).lean();
+	assert.notEqual(idea.moderation.state, 'hidden', 'six throwaway accounts hide nothing');
+	assert.equal(idea.moderation.reportCount, 6);
+	const fay = await newUser('founder', 'Fay');
+	const queue = await asAdmin(() => fay.get('/admin/moderation?view=reported'), fay);
+	assert.equal(queue.status, 200);
+	assert.ok(queue.body.some((q) => String(q.id) === String(ideaId)), 'an admin still sees the reports');
 });

@@ -26,9 +26,11 @@ const DEFAULTS = {
 	Investor: { user: schemaDefaults(Investor, bank.questions.filter((q) => q.entity === 'user').flatMap((q) => q.fields)), idea: {} },
 };
 
-// Dev-only clock override so backoff can be tested across days in a browser.
+// Dev-only clock override so backoff can be tested across days in a browser. Like dev login it
+// needs an explicit switch, so a staging box that forgot NODE_ENV doesn't take clocks from clients.
+const devTools = () => process.env.NODE_ENV !== 'production' && process.env.DEV_TOOLS === 'true';
 const clock = (req) => {
-	if (process.env.NODE_ENV !== 'production' && req.get('x-dev-now')) {
+	if (devTools() && req.get('x-dev-now')) {
 		const d = new Date(req.get('x-dev-now'));
 		if (!Number.isNaN(d.getTime())) return d;
 	}

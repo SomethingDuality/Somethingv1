@@ -11,7 +11,6 @@ export const metadata: Metadata = {
   title: "Something",
   description:
     "Ideas find their people. Capital finds its purpose. Two AI minds — Nothing and Something — co-pilot your idea into reality.",
-  themeColor: "#0A0A0C",
 }
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

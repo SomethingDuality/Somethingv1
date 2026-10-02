@@ -14,6 +14,7 @@ from pymongo.errors import DuplicateKeyError
 
 from app.core import db
 from app.memory import slots
+from app.memory.decide import when_iso
 from app.memory.schemas import DECAY
 
 
@@ -77,7 +78,7 @@ def _new_note(scope: dict, cand: dict, decision: dict, embedding: list | None, m
         "source": cand.get("source", {}), "source_at": cand.get("source", {}).get("at"),
         "provenance": cand["provenance"], "confirmed_at": cand.get("confirmed_at"),
         "modality": cand.get("modality", "decided"),
-        "valid_at": cand.get("valid_at") or cand.get("observed_at"),
+        "valid_at": when_iso(cand.get("valid_at")) or when_iso(cand.get("observed_at")),
         "invalid_at": invalid_at, "created_at": _now(), "expired_at": None,
         "status": status, "links": decision.get("links", []), "flags": decision.get("flags", []),
         "embedding": to_binary(np.asarray(embedding, dtype=np.float32)) if embedding is not None else None,
@@ -130,7 +131,10 @@ async def commit(scope: dict, cand: dict, decision: dict, *, embedding: list | N
                 status, invalid_at = "superseded", (newer_doc or {}).get("valid_at")
             new = _new_note(scope, cand, decision, embedding, model, status=status, invalid_at=invalid_at)
             await notes.insert_one(new, session=s)
-            result.update(outcome="conflict" if op == "ADD_CONFLICT" else "added", written_note_ids=[new["_id"]])
+            # Only a decided, current value is mirrored into Node's fields ("added"); an option, an
+            # old value or a conflict stays in memory.
+            outcome = {"ADD_CONFLICT": "conflict", "ADD_OPTION": "added_option", "ADD_HISTORICAL": "added_historical"}.get(op, "added")
+            result.update(outcome=outcome, written_note_ids=[new["_id"]])
         await db.col("agent_memory_decisions").insert_one({
             **log, "scope_key": scope["scope_key"], "user_id": scope["user_id"], "idea_id": scope.get("idea_id"),
             "decision": decision, "outcome": result["outcome"], "note_ids": result["written_note_ids"], "at": now,

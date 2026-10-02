@@ -27,6 +27,8 @@ const targetFor = (type) => {
 };
 
 // Side effects of a state change: counters, caches and a word to the author.
+const TRUSTED_AGE_MS = 24 * 60 * 60 * 1000;
+
 const onStateChange = async (type, doc, from, to) => {
 	const t = TARGETS[type];
 	const place = await placeOf(type, doc);
@@ -35,9 +37,12 @@ const onStateChange = async (type, doc, from, to) => {
 		// The parent's count only includes comments people can see.
 		if (delta && place.kind === 'problem') await Problem.updateOne({ _id: place.id }, { $inc: { commentsCount: delta } });
 		if (delta && place.kind === 'idea') await Idea.updateOne({ _id: place.id }, { $inc: { comments: delta } });
-		if (place.kind === 'idea') await cache.del(`comments:v1:${place.id}`);
+		if (place.kind === 'idea') await cache.del(`comments:v2:${place.id}`);
 	}
-	if (type === 'idea') await cache.del(`user_ideas:${doc.founder_id}`);
+	if (type === 'idea') {
+		await cache.del(`user_ideas:${doc.founder_id}`);
+		if (delta) await cache.dropPublicLists();
+	}
 
 	const owner = doc[t.owner];
 	if (!owner) return;
@@ -77,10 +82,12 @@ const createReport = async ({ reporterId, type, id, reason, note }) => {
 	}
 	if (!inserted) return { alreadyReported: true, hidden: false };
 
-	await t.model().updateOne({ _id: id }, { $inc: { 'moderation.reportCount': 1 } });
+	const reporter = await BaseUser.findById(reporterId).select('emailVerified createdAt').lean();
+	const trusted = Boolean(reporter?.emailVerified) && Date.now() - new Date(reporter.createdAt).getTime() >= TRUSTED_AGE_MS;
+	await t.model().updateOne({ _id: id }, { $inc: { 'moderation.reportCount': 1, ...(trusted && { 'moderation.trustedReports': 1 }) } });
 	// Conditional, so only one of several parallel reports flips it (and notifies once).
 	const hide = await t.model().updateOne(
-		{ _id: id, 'moderation.reportCount': { $gte: t.threshold }, 'moderation.state': { $nin: ['approved', 'hidden', 'removed'] } },
+		{ _id: id, 'moderation.trustedReports': { $gte: t.threshold }, 'moderation.state': { $nin: ['approved', 'hidden', 'removed'] } },
 		{ $set: { 'moderation.state': 'hidden', 'moderation.hiddenAt': new Date() } },
 	);
 	const hidden = hide.modifiedCount === 1;
@@ -102,7 +109,7 @@ const applyAction = async ({ adminId, type, id, action, note }) => {
 
 	const set = { 'moderation.state': to, 'moderation.needsReview': false, 'moderation.reviewedAt': new Date() };
 	// A restored item starts counting again; approved items keep their history but are immune.
-	if (action === 'restore') set['moderation.reportCount'] = 0;
+	if (action === 'restore') Object.assign(set, { 'moderation.reportCount': 0, 'moderation.trustedReports': 0 });
 	await t.model().updateOne({ _id: id }, { $set: set });
 	await ModerationAction.create({
 		adminId, targetType: type, targetId: id, action, from, to,

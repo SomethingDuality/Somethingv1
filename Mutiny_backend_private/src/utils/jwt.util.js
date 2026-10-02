@@ -8,18 +8,18 @@ const ACCESS_EXPIRY  = '15m';
 const REFRESH_EXPIRY = '7d';
 
 
-const generateAccessToken = (user) => {
+const generateAccessToken = (user, sid) => {
 	return jwt.sign(
-		{ _id: user._id, role: user.role },
+		{ _id: user._id, role: user.role, ...(sid && { sid }) },
 		ACCESS_SECRET,
 		{ expiresIn: ACCESS_EXPIRY }
 	);
 };
 
 
-const generateRefreshToken = (user) => {
+const generateRefreshToken = (user, sid) => {
 	return jwt.sign(
-		{ _id: user._id },
+		{ _id: user._id, sid, jti: require('crypto').randomBytes(8).toString('hex') },
 		REFRESH_SECRET,
 		{ expiresIn: REFRESH_EXPIRY }
 	);

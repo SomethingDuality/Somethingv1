@@ -8,7 +8,7 @@ const GENRES = Idea.schema.path('stage').enumValues;
 
 const fetch_popular_posts = async (req, res) => {
 	let { limit, genre } = req.body || {};
-	limit = Math.min(Number(limit) || 10, 50);
+	limit = Math.max(1, Math.min(Math.trunc(Number(limit)) || 10, 50));
 
 	const normalizedGenre = String(genre || '').toLowerCase();
 	if (!GENRES.includes(normalizedGenre)) {

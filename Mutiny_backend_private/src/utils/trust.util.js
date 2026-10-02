@@ -9,36 +9,21 @@ const TRUST_WEIGHTS = {
 };
 
 
+// One atomic pipeline update (X-45): the counters move and the score is recomputed from them in
+// the same write, so two events at once can't leave a stale score. Counters never go below 0.
 const incrementTrust = async (investorId, deltas = {}) => {
-	const $inc = {};
-
+	const set = {};
 	for (const [field, amount] of Object.entries(deltas)) {
 		if (!TRUST_WEIGHTS[field]) continue;
-		if (typeof amount !== 'number' || amount === 0) continue;
-		$inc[`trustBreakdown.${field}`] = amount;
+		if (typeof amount !== 'number' || !Number.isFinite(amount) || amount === 0) continue;
+		const path = `trustBreakdown.${field}`;
+		set[path] = { $max: [0, { $add: [{ $ifNull: [`$${path}`, 0] }, amount] }] };
 	}
+	if (Object.keys(set).length === 0) return;
 
-	if (Object.keys($inc).length === 0) return;
-
-	
-	const investor = await Investor
-		.findByIdAndUpdate(investorId, { $inc }, { new: true })
-		.select('trust trustBreakdown')
-		.lean();
-
-	if (!investor) return;
-
-	
-	const { ndas, escrowReleases, receipts, history } = investor.trustBreakdown;
-	const aggregate = Math.min(
-		100,
-		(ndas           || 0) * TRUST_WEIGHTS.ndas           +
-		(escrowReleases || 0) * TRUST_WEIGHTS.escrowReleases +
-		(receipts       || 0) * TRUST_WEIGHTS.receipts       +
-		(history        || 0) * TRUST_WEIGHTS.history
-	);
-
-	await Investor.findByIdAndUpdate(investorId, { trust: aggregate });
+	const score = { $min: [100, { $add: Object.entries(TRUST_WEIGHTS).map(([field, weight]) =>
+		({ $multiply: [{ $ifNull: [`$trustBreakdown.${field}`, 0] }, weight] })) }] };
+	await Investor.updateOne({ _id: investorId }, [{ $set: set }, { $set: { trust: score } }], { updatePipeline: true });
 };
 
 module.exports = { incrementTrust, TRUST_WEIGHTS };
