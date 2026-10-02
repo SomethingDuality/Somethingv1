@@ -15,7 +15,7 @@ const overlapsLimiter = make('overlaps', { windowMs: 60 * 1000, limit: 20, byUse
 // Avatars: random names with our own extension, contents checked (X-7); see utils/uploads.js.
 const upload = multer({
 	storage: multer.diskStorage({
-		destination: (req, file, cb) => cb(null, uploads.AVATARS_DIR),
+		destination: uploads.avatarDestination,
 		filename: uploads.filenameFor(uploads.AVATAR_TYPES),
 	}),
 	fileFilter: uploads.filterFor(uploads.AVATAR_TYPES, 'Only JPEG, PNG, WEBP and GIF images are allowed'),

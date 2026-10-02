@@ -69,6 +69,13 @@ const filterFor = (types, message) => (req, file, cb) =>
 /** multer filename: random, with our extension for the declared type. */
 const filenameFor = (types) => (req, file, cb) => cb(null, randomName(types[file.mimetype].ext));
 
+/**
+ * multer destination for avatars. diskStorage doesn't create folders, and a fresh clone (or CI) has
+ * no uploads/ yet, so the folder is made here, where the file is written, not at server start.
+ */
+const avatarDestination = (req, file, cb) =>
+	fs.promises.mkdir(AVATARS_DIR, { recursive: true }).then(() => cb(null, AVATARS_DIR), cb);
+
 /** Deletes a file we stored, by its stored name only, inside `dir` only. Never throws. */
 const removeStored = async (dir, name) => {
 	if (!isStoredName(name)) return;
@@ -120,5 +127,5 @@ const NO_RENDER = {
 
 module.exports = {
 	MAX_ATTACHMENTS, UPLOADS_ROOT, AVATARS_DIR, IDEAS_DIR, AVATAR_TYPES, ATTACHMENT_TYPES, NO_RENDER,
-	isStoredName, storedNameOf, filterFor, filenameFor, checkMagic, removeStored, removeAvatar, badRequest,
+	isStoredName, storedNameOf, filterFor, filenameFor, avatarDestination, checkMagic, removeStored, removeAvatar, badRequest,
 };

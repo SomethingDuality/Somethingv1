@@ -1,7 +1,5 @@
 require('dotenv').config();
 
-const fs       = require('fs');
-const path     = require('path');
 const mongoose = require('mongoose');
 const app      = require('./app.js');
 const internalApp = require('./internal/app.js');
@@ -20,11 +18,6 @@ for (const name of ['MONGO_URI', 'ACCESS_TOKEN_SECRET', 'REFRESH_TOKEN_SECRET'])
 		console.error(`${name} is not set in .env (see .env.example)`);
 		process.exit(1);
 	}
-}
-
-// multer's diskStorage doesn't create folders; without these, uploads fail with ENOENT.
-for (const dir of ['avatars', 'ideas']) {
-	fs.mkdirSync(path.join(__dirname, '../uploads', dir), { recursive: true });
 }
 
 
