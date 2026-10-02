@@ -34,7 +34,7 @@ jobs:
       backend: ${{ steps.diff.outputs.backend }}
       frontend: ${{ steps.diff.outputs.frontend }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - id: diff
@@ -61,8 +61,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
       # The taxonomy, moderation lists, question bank and agent collections are generated into
@@ -79,8 +79,8 @@ jobs:
       run:
         working-directory: agent
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -89,10 +89,10 @@ jobs:
       - run: ruff check . --exclude .venv
       # The tests start their own single-node replica set (transactions need one). The mongod
       # binary is the one mongodb-memory-server downloads for the backend's tests.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ~/.cache/mongodb-binaries
           key: mongodb-binaries-${{ runner.os }}-${{ hashFiles('Mutiny_backend_private/package.json') }}
@@ -118,11 +118,11 @@ jobs:
       run:
         working-directory: Mutiny_backend_private
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ~/.cache/mongodb-binaries
           key: mongodb-binaries-${{ runner.os }}-${{ hashFiles('Mutiny_backend_private/package.json') }}
@@ -142,8 +142,8 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -152,7 +152,7 @@ jobs:
       - run: npm run typecheck
       - run: npm run lint
       - run: npm test
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: frontend/.next/cache
           key: next-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}-${{ hashFiles('frontend/app/**', 'frontend/components/**', 'frontend/lib/**', 'frontend/hooks/**') }}
@@ -179,7 +179,7 @@ jobs:
     steps:
       # A pull request that adds or upgrades a package with a known high or critical vulnerability
       # fails here. It reads GitHub's dependency graph for the diff; no checkout, no secrets.
-      - uses: actions/dependency-review-action@v4
+      - uses: actions/dependency-review-action@v5
         with:
           fail-on-severity: high
 
